@@ -1,0 +1,43 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.13.36105.23
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Microsoft.McpGateway.Management", "Microsoft.McpGateway.Management\src\Microsoft.McpGateway.Management.csproj", "{441F309E-B38C-8AB8-DB3F-2B4E64A9FA63}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Microsoft.McpGateway.Management.Tests", "Microsoft.McpGateway.Management\test\Microsoft.McpGateway.Management.Tests.csproj", "{970CBFAE-A321-D57E-5765-7EEE9C74EF07}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Microsoft.McpGateway.Service", "Microsoft.McpGateway.Service\src\Microsoft.McpGateway.Service.csproj", "{A014200E-7F7D-A05F-7168-E3D6969022FE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Microsoft.McpGateway.Service.Tests", "Microsoft.McpGateway.Service\test\Microsoft.McpGateway.Service.Tests.csproj", "{B4F1001F-DB13-3433-BA1E-80C8AF0801C9}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{441F309E-B38C-8AB8-DB3F-2B4E64A9FA63}.Debug|x64.ActiveCfg = Debug|x64
+		{441F309E-B38C-8AB8-DB3F-2B4E64A9FA63}.Debug|x64.Build.0 = Debug|x64
+		{441F309E-B38C-8AB8-DB3F-2B4E64A9FA63}.Release|x64.ActiveCfg = Release|x64
+		{441F309E-B38C-8AB8-DB3F-2B4E64A9FA63}.Release|x64.Build.0 = Release|x64
+		{970CBFAE-A321-D57E-5765-7EEE9C74EF07}.Debug|x64.ActiveCfg = Debug|x64
+		{970CBFAE-A321-D57E-5765-7EEE9C74EF07}.Debug|x64.Build.0 = Debug|x64
+		{970CBFAE-A321-D57E-5765-7EEE9C74EF07}.Release|x64.ActiveCfg = Release|x64
+		{970CBFAE-A321-D57E-5765-7EEE9C74EF07}.Release|x64.Build.0 = Release|x64
+		{A014200E-7F7D-A05F-7168-E3D6969022FE}.Debug|x64.ActiveCfg = Debug|x64
+		{A014200E-7F7D-A05F-7168-E3D6969022FE}.Debug|x64.Build.0 = Debug|x64
+		{A014200E-7F7D-A05F-7168-E3D6969022FE}.Release|x64.ActiveCfg = Release|x64
+		{A014200E-7F7D-A05F-7168-E3D6969022FE}.Release|x64.Build.0 = Release|x64
+		{B4F1001F-DB13-3433-BA1E-80C8AF0801C9}.Debug|x64.ActiveCfg = Debug|x64
+		{B4F1001F-DB13-3433-BA1E-80C8AF0801C9}.Debug|x64.Build.0 = Debug|x64
+		{B4F1001F-DB13-3433-BA1E-80C8AF0801C9}.Release|x64.ActiveCfg = Release|x64
+		{B4F1001F-DB13-3433-BA1E-80C8AF0801C9}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {FB8F08D8-DA21-401D-9BEE-0B1F317B3AE0}
+	EndGlobalSection
+EndGlobal

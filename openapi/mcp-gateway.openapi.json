@@ -1,0 +1,278 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "MCP Gateway Mangement API",
+    "version": "1.0.0",
+    "description": "RESTful APIs for MCP Server Management"
+  },
+    "servers": [
+    {
+      "url": "http://localhost:8000",
+      "description": "Local development"
+    }
+  ],
+  "paths": {
+    "/adapters": {
+      "post": {
+        "summary": "Deploy and register a new MCP server",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "imageName": {
+                    "type": "string"
+                  },
+                  "imageVersion": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "imageName",
+                  "imageVersion"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Adapter created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Adapter"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List all MCP servers the user can access",
+        "responses": {
+          "200": {
+            "description": "List of adapters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Adapter"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/adapters/{name}": {
+      "get": {
+        "summary": "Retrieve metadata for a specific adapter",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Adapter metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Adapter"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update the deployment",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Adapter"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Adapter updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Adapter"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove the server",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
+    "/adapters/{name}/status": {
+      "get": {
+        "summary": "Check the deployment status",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Adapter status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "readyReplicas": {
+                      "type": "integer"
+                    },
+                    "updatedReplicas": {
+                      "type": "integer"
+                    },
+                    "availableReplicas": {
+                      "type": "integer"
+                    },
+                    "image": {
+                      "type": "string"
+                    },
+                    "replicaStatus": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/adapters/{name}/logs": {
+      "get": {
+        "summary": "Access the server's running logs",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Log output",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Adapter": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "imageName": {
+            "type": "string"
+          },
+          "imageVersion": {
+            "type": "string"
+          },
+          "environmentVariables": {
+            "type": "object"
+          },
+          "replicaCount": {
+            "type": "integer"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "connectionType": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastUpdatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

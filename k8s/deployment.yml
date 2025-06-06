@@ -1,0 +1,78 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: adapter
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcpgateway
+  namespace: adapter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcpgateway
+  template:
+    metadata:
+      labels:
+        app: mcpgateway
+    spec:
+      serviceAccountName: mcpgateway-sa
+      containers:
+        - name: mcpgateway-container
+          image: localhost:5000/microsoft-mcpgateway-service:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: "Development"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcpgateway-service
+  namespace: adapter
+spec:
+  selector:
+    app: mcpgateway
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcpgateway-sa
+  namespace: adapter
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: app-manager
+  namespace: adapter
+rules:
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "pods"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: app-manager-binding
+  namespace: adapter
+subjects:
+  - kind: ServiceAccount
+    name: mcpgateway-sa
+    namespace: adapter
+roleRef:
+  kind: Role
+  name: app-manager
+  apiGroup: rbac.authorization.k8s.io
