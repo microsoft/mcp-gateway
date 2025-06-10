@@ -1,0 +1,30 @@
+name: Build and Test Solution
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout source
+      uses: actions/checkout@v3
+
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.x'
+
+    - name: Restore dependencies
+      run: dotnet restore dotnet/Microsoft.McpGateway.sln
+
+    - name: Build
+      run: dotnet build dotnet/Microsoft.McpGateway.sln --configuration Release --no-restore
+
+    - name: Test
+      run: dotnet test dotnet/Microsoft.McpGateway.sln --configuration Release --verbosity normal
