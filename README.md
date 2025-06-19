@@ -142,6 +142,12 @@ flowchart LR
      - `http://localhost:8000/adapters/{name}/mcp` (Streamable HTTP)  
      - `http://localhost:8000/adapters/{name}/sse` (SSE)
 
+8. **Clean up the environment**  
+   To remove all deployed resources, delete the Kubernetes namespace:
+   ```sh
+   kubectl delete namespace adapter
+   ```
+
 ## Contributing
 
 This project welcomes contributions and suggestions.  Most contributions require you to agree to a
