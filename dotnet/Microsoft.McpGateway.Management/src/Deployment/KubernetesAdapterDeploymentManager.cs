@@ -20,7 +20,7 @@ namespace Microsoft.McpGateway.Management.Deployment
 
         public KubernetesAdapterDeploymentManager(string containerRegistryAddress, IKubeClientWrapper kubeClient, ILogger<KubernetesAdapterDeploymentManager> logger)
         {
-            ArgumentException.ThrowIfNullOrEmpty(containerRegistryAddress, nameof(containerRegistryAddress));
+            ArgumentException.ThrowIfNullOrEmpty(containerRegistryAddress);
 
             _containerRegistryAddress = containerRegistryAddress;
             _kubeClient = kubeClient ?? throw new ArgumentNullException(nameof(kubeClient));

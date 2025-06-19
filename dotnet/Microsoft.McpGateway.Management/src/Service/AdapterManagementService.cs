@@ -47,8 +47,8 @@ namespace Microsoft.McpGateway.Management.Service
 
         public async Task<AdapterResource?> GetAsync(ClaimsPrincipal accessContext, string name, CancellationToken cancellationToken)
         {
-            ArgumentNullException.ThrowIfNull(accessContext, nameof(accessContext));
-            ArgumentException.ThrowIfNullOrEmpty(name, nameof(name));
+            ArgumentNullException.ThrowIfNull(accessContext);
+            ArgumentException.ThrowIfNullOrEmpty(name);
 
             logger.LogInformation("Start getting /adapters/{name}.", name.Sanitize());
 
@@ -90,8 +90,8 @@ namespace Microsoft.McpGateway.Management.Service
 
         public async Task DeleteAsync(ClaimsPrincipal accessContext, string name, CancellationToken cancellationToken)
         {
-            ArgumentNullException.ThrowIfNull(accessContext, nameof(accessContext));
-            ArgumentException.ThrowIfNullOrEmpty(name, nameof(name));
+            ArgumentNullException.ThrowIfNull(accessContext);
+            ArgumentException.ThrowIfNullOrEmpty(name);
 
             logger.LogInformation("Start deleting /adapters/{name}.", name.Sanitize());
             await CheckWriteAccessAsync(accessContext, name, cancellationToken).ConfigureAwait(false);
@@ -105,7 +105,7 @@ namespace Microsoft.McpGateway.Management.Service
 
         public async Task<IEnumerable<AdapterResource>> ListAsync(ClaimsPrincipal accessContext, CancellationToken cancellationToken)
         {
-            ArgumentNullException.ThrowIfNull(accessContext, nameof(accessContext));
+            ArgumentNullException.ThrowIfNull(accessContext);
 
             logger.LogInformation("Start listing /adapters for user.");
             var adapterResources = await _store.ListAsync(cancellationToken).ConfigureAwait(false);
@@ -116,8 +116,8 @@ namespace Microsoft.McpGateway.Management.Service
 
         private async Task CheckWriteAccessAsync(ClaimsPrincipal accessContext, string resouceName, CancellationToken cancellationToken)
         {
-            ArgumentNullException.ThrowIfNull(accessContext, nameof(accessContext));
-            ArgumentException.ThrowIfNullOrEmpty(resouceName, nameof(resouceName));
+            ArgumentNullException.ThrowIfNull(accessContext);
+            ArgumentException.ThrowIfNullOrEmpty(resouceName);
 
             var existing = await _store.TryGetAsync(resouceName, cancellationToken).ConfigureAwait(false)
                     ?? throw new ArgumentException("The adapter does not exist.");

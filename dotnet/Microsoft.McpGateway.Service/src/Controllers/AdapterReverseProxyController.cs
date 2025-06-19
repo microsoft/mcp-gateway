@@ -148,8 +148,8 @@ namespace Microsoft.McpGateway.Service.Controllers
 
         private static Uri ReplaceUriAddress(Uri originalUri, string newAddress)
         {
-            ArgumentNullException.ThrowIfNull(originalUri, nameof(originalUri));
-            ArgumentException.ThrowIfNullOrEmpty(newAddress, nameof(newAddress));
+            ArgumentNullException.ThrowIfNull(originalUri);
+            ArgumentException.ThrowIfNullOrEmpty(newAddress);
 
             var segments = originalUri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
 
