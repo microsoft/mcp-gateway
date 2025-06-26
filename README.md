@@ -181,7 +181,7 @@ The cloud-deployed service needs authentication. Here we configure the basic bea
 ### 3. Deploy Infrastructure Resources
 
 This script will:
-- Create a resource group named `<rg>`
+- Create a resource group named `<resourceGroupName>`
 - Deploy Azure infrastructure via Bicep templates
 
    | Resource Name                     | Resource Type               |
