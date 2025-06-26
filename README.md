@@ -2,6 +2,15 @@
 
 **MCP Gateway** is a reverse proxy and management layer for [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) servers, enabling scalable, session-aware routing and lifecycle management of MCP servers in Kubernetes environments.
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Key Concepts](#key-concepts)
+- [Architecture](#architecture)
+- [Features](#features)
+- [Getting Started – Local Deployment](#getting-started---local-deployment)
+- [Getting Started – Cloud Deployment (Azure)](#getting-started---cloud-deployment-azure)
+
 ## Overview
 
 This project provides:
@@ -80,73 +89,191 @@ flowchart LR
 - Stateless reverse proxy with a distributed session store (production mode).
 - Kubernetes-native deployment using StatefulSets and headless services.
 
-## 🚀 Getting Started
+## Getting Started - Local Deployment
 
-1. **Prepare Local Development Environment**  
-   - [Install .NET 8 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
-   - [Install Docker Desktop](https://docs.docker.com/desktop/)
-   - [Install and turn on Kubernetes](https://docs.docker.com/desktop/features/kubernetes/#install-and-turn-on-kubernetes)
+### 1. **Prepare Local Development Environment**  
+- [Install .NET 8 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
+- [Install Docker Desktop](https://docs.docker.com/desktop/)
+- [Install and turn on Kubernetes](https://docs.docker.com/desktop/features/kubernetes/#install-and-turn-on-kubernetes)
 
-2. **Run Local Docker Registry**  
+### 2. **Run Local Docker Registry**  
    ```sh
    docker run -d -p 5000:5000 --name registry registry:2.7
    ```
 
-3. **Build & Publish MCP Server Images**  
-   Build and push the MCP server images to your local registry (`localhost:5000`).
-   ```sh
-   docker build -f mcp-example-server/Dockerfile mcp-example-server -t localhost:5000/mcp-example:1.0.0
-   docker push localhost:5000/mcp-example:1.0.0
+### 3. **Build & Publish MCP Server Images**  
+Build and push the MCP server images to your local registry (`localhost:5000`).
+```sh
+docker build -f mcp-example-server/Dockerfile mcp-example-server -t localhost:5000/mcp-example:1.0.0
+docker push localhost:5000/mcp-example:1.0.0
+```
+
+### 4. **Build & Publish MCP Gateway**  
+(Optional) Open `dotnet/Microsoft.McpGateway.sln` with Visual Studio.
+
+Publish the MCP Gateway image by right-clicking `Publish` on `Microsoft.McpGateway.Service` in Visual Studio, or run:
+```sh
+dotnet publish dotnet/Microsoft.McpGateway.Service/src/Microsoft.McpGateway.Service.csproj -c Release /p:PublishProfile=localhost_5000.pubxml
+```
+
+### 5. **Deploy MCP Gateway to Kubernetes Cluster**  
+Apply the deployment manifests:
+```sh
+kubectl apply -f deployment/k8s/local-deployment.yml
+```
+
+### 6. **Enable Port Forwarding**  
+Forward the gateway service port:
+```sh
+kubectl port-forward -n adapter svc/mcpgateway-service 8000:8000
+```
+
+### 7. **Test the API**  
+
+- Import the OpenAPI definition from `openapi/mcp-gateway.openapi.json` into tools like [Postman](https://www.postman.com/), [Bruno](https://www.usebruno.com/), or [Swagger Editor](https://editor.swagger.io/).
+
+- Send a request to create a new adapter resource:
+  ```http
+  POST http://localhost:8000/adapters
+  Content-Type: application/json
+  ```
+   ```json
+   {
+      "name": "mcp-example",
+      "imageName": "mcp-example",
+      "imageVersion": "1.0.0",
+      "description": "test"
+   }
    ```
 
-4. **Build & Publish MCP Gateway**  
-   (Optional) Open `dotnet/Microsoft.McpGateway.sln` with Visual Studio.
+- After deploying the MCP server, use a client like [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector) to test the connection.
 
-   Publish the MCP Gateway image by right-clicking `Publish` on `Microsoft.McpGateway.Service` in Visual Studio, or run:
-   ```sh
-   dotnet publish dotnet/Microsoft.McpGateway.Service/src/Microsoft.McpGateway.Service.csproj -c Release /p:PublishProfile=localhost_5000.pubxml
-   ```
+   To connect to the deployed `mcp-example` server, use:  
+   - `http://localhost:8000/adapters/mcp-example/mcp` (Streamable HTTP)
 
-5. **Deploy MCP Gateway to Kubernetes Cluster**  
-   Apply the deployment manifests:
-   ```sh
-   kubectl apply -f k8s/deployment.yml
-   ```
+   For other servers:  
+   - `http://localhost:8000/adapters/{name}/mcp` (Streamable HTTP)  
+   - `http://localhost:8000/adapters/{name}/sse` (SSE)
 
-6. **Enable Port Forwarding**  
-   Forward the gateway service port:
-   ```sh
-   kubectl port-forward -n adapter svc/mcpgateway-service 8000:8000
-   ```
-
-7. **Test the API**
-
-   - Import the OpenAPI definition from `openapi/mcp-gateway.openapi.json` into tools like [Postman](https://www.postman.com/), [Bruno](https://www.usebruno.com/), or [Swagger Editor](https://editor.swagger.io/).
-
-   - Send a POST request to `http://localhost:8000/adapters` to create a new adapter resource:
-     ```json
-     {
-       "name": "mcp-example",
-       "imageName": "mcp-example",
-       "imageVersion": "1.0.0",
-       "description": "test"
-     }
-     ```
-
-   - After deploying the MCP server, use a client like [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector) to test the connection.
-
-     To connect to the deployed `mcp-example` server, use:  
-     - `http://localhost:8000/adapters/mcp-example/mcp` (Streamable HTTP)
-
-     For other servers:  
-     - `http://localhost:8000/adapters/{name}/mcp` (Streamable HTTP)  
-     - `http://localhost:8000/adapters/{name}/sse` (SSE)
-
-8. **Clean up the environment**  
+### 8. **Clean the Environment**  
    To remove all deployed resources, delete the Kubernetes namespace:
    ```sh
    kubectl delete namespace adapter
    ```
+
+## Getting Started - Cloud Deployment (Azure)
+
+### Cloud Infrastructure
+![Architecture Diagram](infra-diagram.png)
+
+### 1. Prepare Cloud Development Environment
+- An active [Azure subscription](https://azure.microsoft.com) with **Owner** access
+- [Install Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
+- [Install Docker Desktop](https://docs.docker.com/desktop/)
+
+### 2. Setup Entra ID (Azure Active Directory)
+The cloud-deployed service needs authentication. Here we configure the basic bearer token authentication using Azure Entra ID.
+- Go to [App Registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)
+- Create a **single-tenant** app registration
+- Under **Redirect URIs**, add: `http://localhost`
+- Copy the **Application (client) ID** from the overview page
+
+### 3. Deploy Infrastructure Resources
+
+This script will:
+- Create a resource group named `<rg>`
+- Deploy Azure infrastructure via Bicep templates
+
+   | Resource Name                     | Resource Type               |
+   |-----------------------------------|-----------------------------|
+   | acr\<resourceGroupName>           | Container Registry          |
+   | cosmos\<resourceGroupName>        | Azure Cosmos DB Account     |
+   | mg-aag-\<resourceGroupName>       | Application Gateway         |
+   | mg-ai-\<resourceGroupName>        | Application Insights        |
+   | mg-aks-\<resourceGroupName>       | Kubernetes Service (AKS)    |
+   | mg-identity-\<resourceGroupName>  | Managed Identity            |
+   | mg-pip-\<resourceGroupName>       | Public IP Address           |
+   | mg-vnet-\<resourceGroupName>      | Virtual Network             |
+
+- Deploy Kubernetes resources (including `mcp-gateway`) to the provisioned AKS cluster
+
+> **Note:** It's recommended to use Managed Identity for credential-less authentication. This deployment follows that design.
+
+Run the deployment script:
+
+```sh
+deployment/azure-deploy.ps1 -ResourceGroupName <resourceGroupName> -ClientId <appClientId> -Location <azureLocation>
+```
+
+**Parameters:**
+
+| Name               | Description                                           |
+|--------------------|-------------------------------------------------------|
+| `ResourceGroupName`| All lowercase, letters and numbers only               |
+| `ClientId`         | Client ID from your app registration                  |
+| `Location`         | Azure region (default: `westus3`)                     |
+
+### 4. Build & Publish MCP Server Images
+The gateway service pulls the MCP server image from the newly provisioned Azure Container Registry (ACR) during deployment.
+
+Build and push the MCP server image to ACR:
+
+```sh
+az acr login -n acr<resourceGroupName>
+docker build -f mcp-example-server/Dockerfile mcp-example-server -t acr<resourceGroupName>.azurecr.io/mcp-example:1.0.0
+docker push acr<resourceGroupName>.azurecr.io/mcp-example:1.0.0
+```
+
+### 5. Test the API
+
+- Import the OpenAPI spec from `openapi/mcp-gateway.openapi.json` into [Postman](https://www.postman.com/), [Bruno](https://www.usebruno.com/), or [Swagger Editor](https://editor.swagger.io/)
+
+- Acquire a bearer token using this python script locally:
+  ```python
+  from azure.identity import InteractiveBrowserCredential
+  tenant_id = "<your-tenant-id>"
+  client_id = "<your-client-id>"
+  credential = InteractiveBrowserCredential(tenant_id=tenant_id, client_id=client_id)
+  credential.get_token(f"{client_id}/.default").token
+  ```
+
+- Send a POST request to create an adapter resource:
+  ```http
+  POST http://<resourceGroupName>.<location>.cloudapp.azure.com/adapters
+  Authorization: Bearer <token>
+  Content-Type: application/json
+  ```
+  ```json
+  {
+    "name": "mcp-example",
+    "imageName": "mcp-example",
+    "imageVersion": "1.0.0",
+    "description": "test"
+  }
+  ```
+
+- After deploying the MCP server, use a client like [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector) to test the connection. 
+  > **Note:** A valid bearer token is still required in the Authorization header when connecting to the server.
+
+  - To connect to the deployed `mcp-example` server, use:  
+     - `http://<resourceGroupName>.<location>.cloudapp.azure.com/adapters/mcp-example/mcp` (Streamable HTTP)
+
+  - For other servers:  
+     - `http://<resourceGroupName>.<location>.cloudapp.azure.com/adapters/{name}/mcp` (Streamable HTTP)  
+     - `http://<resourceGroupName>.<location>.cloudapp.azure.com/adapters/{name}/sse` (SSE)
+
+### 6. Clean the Environment
+To remove all deployed resources, delete the Azure resource group:
+```sh
+az group delete --name <resourceGroupName> --yes
+```
+
+### 7. Production Onboarding (Follow-up)
+- Configure TLS Certificates – Set up secure HTTPS communication on AAG listener using valid TLS certificates.
+- Apply Network Policies – Restrict incoming traffic within the virtual network and configure Private Endpoints to enhance network security.
+- Enable Advanced Telemetry – Integrate more detailed monitoring, metrics for observability and alert in production.
+- Configure Server Scaling – Adjust scaling for `mcp-gateway` services and MCP servers based on expected load.
+- Set Up Authentication & Authorization – Configure Oauth2.0 authentication with Azure Entra ID (AAD). Apply fine-grained access control to `adapters` via RBAC or custom ACLs.
 
 ## Contributing
 

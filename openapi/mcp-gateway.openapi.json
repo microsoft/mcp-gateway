@@ -7,6 +7,10 @@
   },
     "servers": [
     {
+      "url": "http://<resourceGroupName>.<location>.cloudapp.azure.com",
+      "description": "Azure Deployment"
+    },
+    {
       "url": "http://localhost:8000",
       "description": "Local development"
     }

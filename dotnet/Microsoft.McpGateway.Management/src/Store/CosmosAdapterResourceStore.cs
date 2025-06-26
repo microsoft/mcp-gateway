@@ -50,7 +50,7 @@ namespace Microsoft.McpGateway.Management.Store
                 var response = await _container.ReadItemAsync<AdapterResource>(
                     id: name,
                     partitionKey: new PartitionKey(name),
-                    cancellationToken: cancellationToken);
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 return response.Resource;
             }
@@ -64,11 +64,13 @@ namespace Microsoft.McpGateway.Management.Store
         public async Task UpsertAsync(AdapterResource adapter, CancellationToken cancellationToken)
         {
             using var stream = new MemoryStream();
-            await JsonSerializer.SerializeAsync(stream, adapter, cancellationToken: cancellationToken);
-            await _container.UpsertItemStreamAsync(
+            await JsonSerializer.SerializeAsync(stream, adapter, cancellationToken: cancellationToken).ConfigureAwait(false);
+            stream.Position = 0;
+            var response = await _container.UpsertItemStreamAsync(
                 stream,
                 partitionKey: new PartitionKey(adapter.Id),
-                cancellationToken: cancellationToken);
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
         }
 
         public async Task DeleteAsync(string name, CancellationToken cancellationToken)
@@ -78,7 +80,7 @@ namespace Microsoft.McpGateway.Management.Store
                 await _container.DeleteItemAsync<AdapterResource>(
                     id: name,
                     partitionKey: new PartitionKey(name),
-                    cancellationToken: cancellationToken);
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
             {
@@ -93,7 +95,7 @@ namespace Microsoft.McpGateway.Management.Store
 
             while (query.HasMoreResults)
             {
-                var response = await query.ReadNextAsync(cancellationToken);
+                var response = await query.ReadNextAsync(cancellationToken).ConfigureAwait(false);
                 results.AddRange(response.Resource);
             }
 

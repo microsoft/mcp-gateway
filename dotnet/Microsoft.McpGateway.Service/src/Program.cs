@@ -6,7 +6,6 @@ using Azure.Identity;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Azure.Cosmos.Fluent;
-using Microsoft.Extensions.Caching.Cosmos;
 using Microsoft.Identity.Web;
 using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Service;
@@ -15,8 +14,10 @@ using Microsoft.McpGateway.Service.Routing;
 using Microsoft.McpGateway.Service.Session;
 
 var builder = WebApplication.CreateBuilder(args);
+var credential = new DefaultAzureCredential();
 
 builder.Services.AddApplicationInsightsTelemetry();
+builder.Services.AddLogging();
 
 builder.Services.AddSingleton<IKubernetesClientFactory, LocalKubernetesClientFactory>();
 builder.Services.AddSingleton<IAdapterSessionStore, DistributedMemorySessionStore>();
@@ -37,10 +38,10 @@ else
     {
         var config = builder.Configuration.GetSection("CosmosSettings");
         var connectionString = config["ConnectionString"];
-        var client = string.IsNullOrEmpty(connectionString) ? new CosmosClient(config["AccountEndpoint"], new DefaultAzureCredential()) : new CosmosClient(connectionString);
+        var client = string.IsNullOrEmpty(connectionString) ? new CosmosClient(config["AccountEndpoint"], credential) : new CosmosClient(connectionString);
         return new CosmosAdapterResourceStore(client, config["DatabaseName"]!, "AdapterContainer", c.GetRequiredService<ILogger<CosmosAdapterResourceStore>>());
     });
-    builder.Services.AddCosmosCache((CosmosCacheOptions options) =>
+    builder.Services.AddCosmosCache(options =>
     {
         var config = builder.Configuration.GetSection("CosmosSettings");
         var endpoint = config["AccountEndpoint"];
@@ -50,7 +51,7 @@ else
         options.DatabaseName = config["DatabaseName"]!;
         options.CreateIfNotExists = true;
 
-        options.ClientBuilder = string.IsNullOrEmpty(connectionString) ? new CosmosClientBuilder(endpoint, new DefaultAzureCredential()) : new CosmosClientBuilder(connectionString);
+        options.ClientBuilder = string.IsNullOrEmpty(connectionString) ? new CosmosClientBuilder(endpoint, credential) : new CosmosClientBuilder(connectionString);
     });
 }
 

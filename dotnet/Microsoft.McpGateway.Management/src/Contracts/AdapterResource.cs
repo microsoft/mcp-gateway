@@ -8,6 +8,7 @@ namespace Microsoft.McpGateway.Management.Contracts
     public class AdapterResource : AdapterData
     {
         [JsonPropertyOrder(-1)]
+        [JsonPropertyName("id")]
         public required string Id { get; set; }
 
         /// <summary>
