@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using Microsoft.AspNetCore.Http.Extensions;
+using Microsoft.Net.Http.Headers;
 
 namespace Microsoft.McpGateway.Service
 {
@@ -18,6 +19,10 @@ namespace Microsoft.McpGateway.Service
 
             foreach (var header in context.Request.Headers)
             {
+                // Skip the inbound Authorization header
+                if (string.Equals(header.Key, HeaderNames.Authorization, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
                 if (!requestMessage.Headers.TryAddWithoutValidation(header.Key, [.. header.Value]))
                     requestMessage.Content?.Headers.TryAddWithoutValidation(header.Key, [.. header.Value]);
             }
@@ -35,7 +40,7 @@ namespace Microsoft.McpGateway.Service
             foreach (var header in response.Content.Headers)
                 context.Response.Headers[header.Key] = header.Value.ToArray();
 
-            context.Response.Headers.Remove("transfer-encoding");
+            context.Response.Headers.Remove(HeaderNames.TransferEncoding);
 
             return response.Content.CopyToAsync(context.Response.Body, cancellationToken);
         }

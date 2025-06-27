@@ -274,7 +274,7 @@ To remove all deployed resources, delete the Azure resource group:
 az group delete --name <resourceGroupName> --yes
 ```
 
-## 7. Production Onboarding (Follow-up)
+### 7. Production Onboarding (Follow-up)
 
 - **TLS Configuration**  
   Set up HTTPS on Azure Application Gateway (AAG) listener using valid TLS certificates.
