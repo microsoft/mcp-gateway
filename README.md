@@ -175,10 +175,25 @@ kubectl port-forward -n adapter svc/mcpgateway-service 8000:8000
 The cloud-deployed service needs authentication. Here we configure the basic bearer token authentication using Azure Entra ID.
 - Go to [App Registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)
 - Create a **single-tenant** app registration
+- Add a platform - Mobile and desktop applications
 - Under **Redirect URIs**, add: `http://localhost`
-- Copy the **Application (client) ID** from the overview page
+- Copy the **Application (client) ID** and **Directory (tenant) ID** from the overview page
 
 ### 3. Deploy Infrastructure Resources
+
+Run the deployment script:
+
+```sh
+deployment/azure-deploy.ps1 -ResourceGroupName <resourceGroupName> -ClientId <appClientId> -Location <azureLocation>
+```
+
+**Parameters:**
+
+| Name               | Description                                           |
+|--------------------|-------------------------------------------------------|
+| `ResourceGroupName`| All lowercase, letters and numbers only               |
+| `ClientId`         | Client ID from your app registration                  |
+| `Location`         | Azure region (default: `westus3`)                     |
 
 This script will:
 - Create a resource group named `<resourceGroupName>`
@@ -199,24 +214,11 @@ This script will:
 
 > **Note:** It's recommended to use Managed Identity for credential-less authentication. This deployment follows that design.
 
-Run the deployment script:
-
-```sh
-deployment/azure-deploy.ps1 -ResourceGroupName <resourceGroupName> -ClientId <appClientId> -Location <azureLocation>
-```
-
-**Parameters:**
-
-| Name               | Description                                           |
-|--------------------|-------------------------------------------------------|
-| `ResourceGroupName`| All lowercase, letters and numbers only               |
-| `ClientId`         | Client ID from your app registration                  |
-| `Location`         | Azure region (default: `westus3`)                     |
-
 ### 4. Build & Publish MCP Server Images
 The gateway service pulls the MCP server image from the newly provisioned Azure Container Registry (ACR) during deployment.
 
 Build and push the MCP server image to ACR:
+> **Note:** Ensure that Docker Engine is running before proceeding.
 
 ```sh
 az acr login -n acr<resourceGroupName>
@@ -229,12 +231,16 @@ docker push acr<resourceGroupName>.azurecr.io/mcp-example:1.0.0
 - Import the OpenAPI spec from `openapi/mcp-gateway.openapi.json` into [Postman](https://www.postman.com/), [Bruno](https://www.usebruno.com/), or [Swagger Editor](https://editor.swagger.io/)
 
 - Acquire a bearer token using this python script locally:
+  ```sh
+  pip install azure-identity
+  ```
   ```python
   from azure.identity import InteractiveBrowserCredential
   tenant_id = "<your-tenant-id>"
   client_id = "<your-client-id>"
   credential = InteractiveBrowserCredential(tenant_id=tenant_id, client_id=client_id)
-  credential.get_token(f"{client_id}/.default").token
+  access_token = credential.get_token(f"{client_id}/.default").token
+  print(access_token)
   ```
 
 - Send a POST request to create an adapter resource:
@@ -268,12 +274,23 @@ To remove all deployed resources, delete the Azure resource group:
 az group delete --name <resourceGroupName> --yes
 ```
 
-### 7. Production Onboarding (Follow-up)
-- Configure TLS Certificates – Set up secure HTTPS communication on AAG listener using valid TLS certificates.
-- Apply Network Policies – Restrict incoming traffic within the virtual network and configure Private Endpoints to enhance network security.
-- Enable Advanced Telemetry – Integrate more detailed monitoring, metrics for observability and alert in production.
-- Configure Server Scaling – Adjust scaling for `mcp-gateway` services and MCP servers based on expected load.
-- Set Up Authentication & Authorization – Configure Oauth2.0 authentication with Azure Entra ID (AAD). Apply fine-grained access control to `adapters` via RBAC or custom ACLs.
+## 7. Production Onboarding (Follow-up)
+
+- **TLS Configuration**  
+  Set up HTTPS on Azure Application Gateway (AAG) listener using valid TLS certificates.
+
+- **Network Security**  
+  Restrict incoming traffic within the virtual network and configure Private Endpoints for enhanced network security.
+
+- **Telemetry**  
+  Enable advanced telemetry, detailed metrics, and alerts to support monitoring and troubleshooting in production.
+
+- **Scaling**  
+  Adjust scaling for `mcp-gateway` services and MCP servers based on expected load.
+
+- **Authentication & Authorization**  
+  Set up OAuth 2.0 with Azure Entra ID (AAD) for authentication.
+  Implement fine-grained access control using RBAC or custom ACLs for `adapter` level permissions.
 
 ## Contributing
 

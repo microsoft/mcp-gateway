@@ -1,8 +1,22 @@
 param(
     [Parameter(Mandatory=$true)]
+    [ValidateScript({
+        if ($_ -match '^[a-z0-9]+$') {
+            $true
+        } else {
+            throw "ResourceGroupName must contain only lowercase letters and numbers (no spaces or special characters)."
+        }
+    })]
     [string]$ResourceGroupName,
 
     [Parameter(Mandatory=$true)]
+    [ValidateScript({
+        if ($_ -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
+            $true
+        } else {
+            throw "ClientId must be a valid GUID in the format 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'."
+        }
+    })]
     [string]$ClientId,
 
     [string]$Location = "westus3"
