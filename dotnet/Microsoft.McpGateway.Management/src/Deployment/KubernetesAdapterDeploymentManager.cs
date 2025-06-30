@@ -48,6 +48,11 @@ namespace Microsoft.McpGateway.Management.Deployment
                         Metadata = new V1ObjectMeta { Labels = labels },
                         Spec = new V1PodSpec
                         {
+                            SecurityContext = new V1PodSecurityContext
+                            {
+                                RunAsUser = 1100,
+                                RunAsGroup = 1100
+                            },
                             Containers =
                             [
                                 new()
@@ -63,7 +68,27 @@ namespace Microsoft.McpGateway.Management.Deployment
                                             ContainerPort = 8000,
                                             Protocol = "TCP"
                                         }
-                                    ]
+                                    ],
+                                    SecurityContext = new V1SecurityContext
+                                    {
+                                        AllowPrivilegeEscalation = false,
+                                        ReadOnlyRootFilesystem = true,
+                                        Capabilities = new V1Capabilities { Drop = ["ALL"] }
+                                    },
+                                    Resources = new V1ResourceRequirements
+                                    {
+                                        Limits = new Dictionary<string, ResourceQuantity>
+                                        {
+                                            ["cpu"] = new ResourceQuantity("1"),
+                                            ["memory"] = new ResourceQuantity("512Mi"),
+                                            ["ephemeral-storage"] = new ResourceQuantity("2Gi")
+                                        },
+                                        Requests = new Dictionary<string, ResourceQuantity>
+                                        {
+                                            ["cpu"] = new ResourceQuantity("250m"),
+                                            ["memory"] = new ResourceQuantity("256Mi")
+                                        }
+                                    }
                                 }
                             ]
                         }
