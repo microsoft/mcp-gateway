@@ -55,7 +55,7 @@ metadata:
   name: mcpgateway-sa
   namespace: adapter
   annotations:
-    azure.workload.identity/client-id: "{AZURE_CLIENT_ID}"
+    azure.workload.identity/client-id: "${AZURE_CLIENT_ID}"
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -94,14 +94,14 @@ metadata:
   namespace: adapter
 data:
   AzureAd__Instance: "https://login.microsoftonline.com/"
-  AzureAd__TenantId: "{TENANT_ID}"
-  AzureAd__ClientId: "{CLIENT_ID}"
-  AzureAd__Audience: "{CLIENT_ID}"
+  AzureAd__TenantId: "${TENANT_ID}"
+  AzureAd__ClientId: "${CLIENT_ID}"
+  AzureAd__Audience: "${CLIENT_ID}"
 
-  CosmosSettings__AccountEndpoint: "https://cosmos{IDENTIFIER}.documents.azure.com:443/"
+  CosmosSettings__AccountEndpoint: "https://cosmos${IDENTIFIER}.documents.azure.com:443/"
   CosmosSettings__DatabaseName: "McpGatewayDb"
   CosmosSettings__ConnectionString: ""
 
-  ApplicationInsights__ConnectionString: "{APPINSIGHTS_CONNECTION_STRING}"
+  ApplicationInsights__ConnectionString: "${APPINSIGHTS_CONNECTION_STRING}"
 
-  ContainerRegistrySettings__Endpoint: "acr{IDENTIFIER}.azurecr.io"
+  ContainerRegistrySettings__Endpoint: "acr${IDENTIFIER}.azurecr.io"

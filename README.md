@@ -9,7 +9,7 @@
 - [Architecture](#architecture)
 - [Features](#features)
 - [Getting Started – Local Deployment](#getting-started---local-deployment)
-- [Getting Started – Cloud Deployment (Azure)](#getting-started---cloud-deployment-azure)
+- [Getting Started – Deploy to Azure](#getting-started---deploy-to-azure)
 
 ## Overview
 
@@ -161,7 +161,7 @@ kubectl port-forward -n adapter svc/mcpgateway-service 8000:8000
    kubectl delete namespace adapter
    ```
 
-## Getting Started - Cloud Deployment (Azure)
+## Getting Started - Deploy to Azure
 
 ### Cloud Infrastructure
 ![Architecture Diagram](infra-diagram.png)
@@ -179,24 +179,19 @@ The cloud-deployed service needs authentication. Here we configure the basic bea
 - Under **Redirect URIs**, add: `http://localhost`
 - Copy the **Application (client) ID** and **Directory (tenant) ID** from the overview page
 
-### 3. Deploy Infrastructure Resources
+### 3. Deploy Service Resources
 
-Run the deployment script:
-
-```sh
-deployment/azure-deploy.ps1 -ResourceGroupName <resourceGroupName> -ClientId <appClientId> -Location <azureLocation>
-```
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fmicrosoft%2Fmcp-gateway%2Fmain%2Fdeployment%2Finfra%2Fazure-deployment.json)
 
 **Parameters:**
 
 | Name               | Description                                           |
 |--------------------|-------------------------------------------------------|
-| `ResourceGroupName`| All lowercase, letters and numbers only               |
+| `ResourceGroup`| The name of the resource group must be all lowercase, letters and numbers only               |
 | `ClientId`         | Client ID from your app registration                  |
-| `Location`         | Azure region (default: `westus3`)                     |
+| `Location`         | Azure region                     |
 
-This script will:
-- Create a resource group named `<resourceGroupName>`
+The deployment will:
 - Deploy Azure infrastructure via Bicep templates
 
    | Resource Name                     | Resource Type               |

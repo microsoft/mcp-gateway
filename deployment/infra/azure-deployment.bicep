@@ -1,16 +1,17 @@
 // Parameters
-param identifer string = resourceGroup().name
+param clientId string
+param identifier string = resourceGroup().name
 param location string = resourceGroup().location
-param aksName string = 'mg-aks-${identifer}'
-param acrName string = 'acr${identifer}'
-param cosmosDbAccountName string = 'cosmos${identifer}'
-param userAssignedIdentityName string = 'mg-identity-${identifer}'
-param appInsightsName string = 'mg-ai-${identifer}'
-param vnetName string = 'mg-vnet-${identifer}'
-param aksSubnetName string = 'aks-subnet-${identifer}'
-param appGwSubnetName string = 'mg-subnet-${identifer}'
-param appGwName string = 'mg-aag-${identifer}'
-param domainNameLabel string = identifer
+var aksName = 'mg-aks-${identifier}'
+var acrName = 'acr${identifier}'
+var cosmosDbAccountName = 'cosmos${identifier}'
+var userAssignedIdentityName = 'mg-identity-${identifier}'
+var appInsightsName = 'mg-ai-${identifier}'
+var vnetName = 'mg-vnet-${identifier}'
+var aksSubnetName = 'aks-subnet-${identifier}'
+var appGwSubnetName = 'mg-subnet-${identifier}'
+var appGwName = 'mg-aag-${identifier}'
+var domainNameLabel = identifier
 
 // VNet
 resource vnet 'Microsoft.Network/virtualNetworks@2022-07-01' = {
@@ -130,7 +131,7 @@ resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 
 // Public IP for App Gateway
 resource appGwPublicIp 'Microsoft.Network/publicIPAddresses@2022-05-01' = {
-  name: 'mg-pip-${identifer}'
+  name: 'mg-pip-${identifier}'
   location: location
   sku: {
     name: 'Standard'
@@ -270,10 +271,36 @@ resource uai 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   location: location
 }
 
+// User Assigned Identity for amdin
+resource uaiAdmin 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${userAssignedIdentityName}-admin'
+  location: location
+}
+
+resource uaiAdminContributorOnAks 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(aks.name, uaiAdmin.name, 'AKSContributor')
+  scope: aks
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ed7f3fbd-7b88-4dd4-9017-9adb7ce333f8') // AKS Contributor
+    principalId: uaiAdmin.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource uaiAdminRbacClusterAdminOnAks 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(aks.name, uaiAdmin.name, 'AKSRBACAdmin')
+  scope: aks
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b') // AKS Service RBAC Cluster Admin
+    principalId: uaiAdmin.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Federated Credential
 resource federatedCred 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
   parent: uai
-  name: 'mg-sa-federation-${identifer}'
+  name: 'mg-sa-federation-${identifier}'
   properties: {
     audiences: [
       'api://AzureADTokenExchange'
@@ -365,5 +392,54 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
-output identityClientId string = uai.properties.clientId
-output applicationInsightConnectionString string = appInsights.properties.ConnectionString
+resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${uaiAdmin.id}': {}
+    }
+  }
+  name: 'kubernetesDeployment'
+  location: location
+  kind: 'AzureCLI'
+  properties: {
+    azCliVersion: '2.60.0'
+    timeout: 'PT30M'
+    retentionInterval: 'P1D'
+    scriptContent: '''
+      sed -i "s|\${AZURE_CLIENT_ID}|$AZURE_CLIENT_ID|g" cloud-deployment-template.yml
+      sed -i "s|\${TENANT_ID}|$TENANT_ID|g" cloud-deployment-template.yml
+      sed -i "s|\${CLIENT_ID}|$CLIENT_ID|g" cloud-deployment-template.yml
+      sed -i "s|\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g" cloud-deployment-template.yml
+      sed -i "s|\${IDENTIFIER}|$ResourceGroupName|g" cloud-deployment-template.yml
+
+      az aks command invoke -g $ResourceGroupName -n mg-aks-"$ResourceGroupName" --command "kubectl apply -f cloud-deployment-template.yml" --file cloud-deployment-template.yml
+    '''
+    supportingScriptUris: [
+      'https://raw.githubusercontent.com/microsoft/mcp-gateway/refs/heads/main/deployment/k8s/cloud-deployment-template.yml'
+    ]
+    environmentVariables: [
+      {
+        name: 'CLIENT_ID'
+        value: clientId
+      }
+      {
+        name: 'AZURE_CLIENT_ID'
+        value: uai.properties.clientId
+      }
+      {
+        name: 'APPINSIGHTS_CONNECTION_STRING'
+        value: appInsights.properties.ConnectionString
+      }
+      {
+        name: 'ResourceGroupName'
+        value: resourceGroup().name
+      }
+      {
+        name: 'TENANT_ID'
+        value: tenant().tenantId
+      }
+    ]
+  }
+  dependsOn: [aks]
+}
