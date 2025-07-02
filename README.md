@@ -185,25 +185,29 @@ The cloud-deployed service needs authentication. Here we configure the basic bea
 
 **Parameters:**
 
-| Name               | Description                                           |
-|--------------------|-------------------------------------------------------|
-| `ResourceGroup`| The name of the resource group must be all lowercase, letters and numbers only               |
-| `ClientId`         | Client ID from your app registration                  |
-| `Location`         | Azure region                     |
+**Parameters:**
+
+| Name              | Description                                                                                   |
+|-------------------|-----------------------------------------------------------------------------------------------|
+| `resourceGroup`   | The name of the resource group. Must be all lowercase letters and numbers.                   |
+| `clientId`        | The Entra ID (AAD) client ID from your app registration.                                     |
+| `location`        | *(Optional)* The Azure region where resources will be deployed. Defaults to the resource group location.  |
+| `resourceLabel`   | *(Optional)* A lowercase alphanumeric suffix used to name resources and as the DNS label.<br/>If not provided, a unique value will be derived from the resource group name. We suggest to set this value and keep it same with the resource group name. |
+
 
 The deployment will:
 - Deploy Azure infrastructure via Bicep templates
 
-   | Resource Name                     | Resource Type               |
-   |-----------------------------------|-----------------------------|
-   | acr\<resourceGroupName>           | Container Registry          |
-   | cosmos\<resourceGroupName>        | Azure Cosmos DB Account     |
-   | mg-aag-\<resourceGroupName>       | Application Gateway         |
-   | mg-ai-\<resourceGroupName>        | Application Insights        |
-   | mg-aks-\<resourceGroupName>       | Kubernetes Service (AKS)    |
-   | mg-identity-\<resourceGroupName>  | Managed Identity            |
-   | mg-pip-\<resourceGroupName>       | Public IP Address           |
-   | mg-vnet-\<resourceGroupName>      | Virtual Network             |
+   | Resource Name                 | Resource Type               |
+   |-------------------------------|-----------------------------|
+   | mgreg\<resourceLabel>         | Container Registry          |
+   | mg-storage-\<resourceLabel>   | Azure Cosmos DB Account     |
+   | mg-aag-\<resourceLabel>       | Application Gateway         |
+   | mg-ai-\<resourceLabel>        | Application Insights        |
+   | mg-aks-\<resourceLabel>       | Kubernetes Service (AKS)    |
+   | mg-identity-\<resourceLabel>  | Managed Identity            |
+   | mg-pip-\<resourceLabel>       | Public IP Address           |
+   | mg-vnet-\<resourceLabel>      | Virtual Network             |
 
 - Deploy Kubernetes resources (including `mcp-gateway`) to the provisioned AKS cluster
 
@@ -216,9 +220,9 @@ Build and push the MCP server image to ACR:
 > **Note:** Ensure that Docker Engine is running before proceeding.
 
 ```sh
-az acr login -n acr<resourceGroupName>
-docker build -f mcp-example-server/Dockerfile mcp-example-server -t acr<resourceGroupName>.azurecr.io/mcp-example:1.0.0
-docker push acr<resourceGroupName>.azurecr.io/mcp-example:1.0.0
+az acr login -n mgreg<resourceLabel>
+docker build -f mcp-example-server/Dockerfile mcp-example-server -t mgreg<resourceLabel>.azurecr.io/mcp-example:1.0.0
+docker push mgreg<resourceLabel>.azurecr.io/mcp-example:1.0.0
 ```
 
 ### 5. Test the API
@@ -240,7 +244,7 @@ docker push acr<resourceGroupName>.azurecr.io/mcp-example:1.0.0
 
 - Send a POST request to create an adapter resource:
   ```http
-  POST http://<resourceGroupName>.<location>.cloudapp.azure.com/adapters
+  POST http://<resourceLabel>.<location>.cloudapp.azure.com/adapters
   Authorization: Bearer <token>
   Content-Type: application/json
   ```
@@ -257,11 +261,11 @@ docker push acr<resourceGroupName>.azurecr.io/mcp-example:1.0.0
   > **Note:** A valid bearer token is still required in the Authorization header when connecting to the server.
 
   - To connect to the deployed `mcp-example` server, use:  
-     - `http://<resourceGroupName>.<location>.cloudapp.azure.com/adapters/mcp-example/mcp` (Streamable HTTP)
+     - `http://<resourceLabel>.<location>.cloudapp.azure.com/adapters/mcp-example/mcp` (Streamable HTTP)
 
   - For other servers:  
-     - `http://<resourceGroupName>.<location>.cloudapp.azure.com/adapters/{name}/mcp` (Streamable HTTP)  
-     - `http://<resourceGroupName>.<location>.cloudapp.azure.com/adapters/{name}/sse` (SSE)
+     - `http://<resourceLabel>.<location>.cloudapp.azure.com/adapters/{name}/mcp` (Streamable HTTP)  
+     - `http://<resourceLabel>.<location>.cloudapp.azure.com/adapters/{name}/sse` (SSE)
 
 ### 6. Clean the Environment
 To remove all deployed resources, delete the Azure resource group:

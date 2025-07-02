@@ -7,7 +7,7 @@
   },
     "servers": [
     {
-      "url": "http://<resourceGroupName>.<location>.cloudapp.azure.com",
+      "url": "http://<resourceLabel>.<location>.cloudapp.azure.com",
       "description": "Azure Deployment"
     },
     {

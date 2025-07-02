@@ -1,17 +1,26 @@
 // Parameters
+@description('The Entra ID client ID used for authentication.')
 param clientId string
-param identifier string = resourceGroup().name
+
+@minLength(3)
+@maxLength(30)
+@description('Optional suffix used for naming Azure resources and as the public DNS label. Must be alphanumeric and lowercase. If not provided, one is derived from the resource group name.')
+param resourceLabel string = uniqueString(resourceGroup().id)
+
+@description('The Azure region for resource deployment. Defaults to the resource group location.')
 param location string = resourceGroup().location
-var aksName = 'mg-aks-${identifier}'
-var acrName = 'acr${identifier}'
-var cosmosDbAccountName = 'cosmos${identifier}'
-var userAssignedIdentityName = 'mg-identity-${identifier}'
-var appInsightsName = 'mg-ai-${identifier}'
-var vnetName = 'mg-vnet-${identifier}'
-var aksSubnetName = 'aks-subnet-${identifier}'
-var appGwSubnetName = 'mg-subnet-${identifier}'
-var appGwName = 'mg-aag-${identifier}'
-var domainNameLabel = identifier
+
+var aksName = 'mg-aks-${resourceLabel}'
+var acrName = 'mgreg${resourceLabel}'
+var cosmosDbAccountName = 'mg-storage-${resourceLabel}'
+var userAssignedIdentityName = 'mg-identity-${resourceLabel}'
+var appInsightsName = 'mg-ai-${resourceLabel}'
+var vnetName = 'mg-vnet-${resourceLabel}'
+var aksSubnetName = 'mg-aks-subnet-${resourceLabel}'
+var appGwSubnetName = 'mg-aag-subnet-${resourceLabel}'
+var appGwName = 'mg-aag-${resourceLabel}'
+var publicIpName = 'mg-pip-${resourceLabel}'
+var federatedCredName = 'mg-sa-federation-${resourceLabel}'
 
 // VNet
 resource vnet 'Microsoft.Network/virtualNetworks@2022-07-01' = {
@@ -131,7 +140,7 @@ resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 
 // Public IP for App Gateway
 resource appGwPublicIp 'Microsoft.Network/publicIPAddresses@2022-05-01' = {
-  name: 'mg-pip-${identifier}'
+  name: publicIpName
   location: location
   sku: {
     name: 'Standard'
@@ -139,7 +148,7 @@ resource appGwPublicIp 'Microsoft.Network/publicIPAddresses@2022-05-01' = {
   properties: {
     publicIPAllocationMethod: 'Static'
     dnsSettings: {
-      domainNameLabel: domainNameLabel
+      domainNameLabel: resourceLabel
     }
   }
 }
@@ -300,7 +309,7 @@ resource uaiAdminRbacClusterAdminOnAks 'Microsoft.Authorization/roleAssignments@
 // Federated Credential
 resource federatedCred 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
   parent: uai
-  name: 'mg-sa-federation-${identifier}'
+  name: federatedCredName
   properties: {
     audiences: [
       'api://AzureADTokenExchange'
@@ -411,7 +420,7 @@ resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01'
       sed -i "s|\${TENANT_ID}|$TENANT_ID|g" cloud-deployment-template.yml
       sed -i "s|\${CLIENT_ID}|$CLIENT_ID|g" cloud-deployment-template.yml
       sed -i "s|\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g" cloud-deployment-template.yml
-      sed -i "s|\${IDENTIFIER}|$ResourceGroupName|g" cloud-deployment-template.yml
+      sed -i "s|\${IDENTIFIER}|$IDENTIFIER|g" cloud-deployment-template.yml
 
       az aks command invoke -g $ResourceGroupName -n mg-aks-"$ResourceGroupName" --command "kubectl apply -f cloud-deployment-template.yml" --file cloud-deployment-template.yml
     '''
@@ -434,6 +443,10 @@ resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01'
       {
         name: 'ResourceGroupName'
         value: resourceGroup().name
+      }
+      {
+        name: 'IDENTIFIER'
+        value: resourceLabel
       }
       {
         name: 'TENANT_ID'

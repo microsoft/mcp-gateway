@@ -98,10 +98,10 @@ data:
   AzureAd__ClientId: "${CLIENT_ID}"
   AzureAd__Audience: "${CLIENT_ID}"
 
-  CosmosSettings__AccountEndpoint: "https://cosmos${IDENTIFIER}.documents.azure.com:443/"
+  CosmosSettings__AccountEndpoint: "https://mg-storage-${IDENTIFIER}.documents.azure.com:443/"
   CosmosSettings__DatabaseName: "McpGatewayDb"
   CosmosSettings__ConnectionString: ""
 
   ApplicationInsights__ConnectionString: "${APPINSIGHTS_CONNECTION_STRING}"
 
-  ContainerRegistrySettings__Endpoint: "acr${IDENTIFIER}.azurecr.io"
+  ContainerRegistrySettings__Endpoint: "mgreg${IDENTIFIER}.azurecr.io"

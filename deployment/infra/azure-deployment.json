@@ -4,34 +4,46 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.23.1.45101",
-      "templateHash": "4637123822135269247"
+      "version": "0.36.1.42791",
+      "templateHash": "18239731932083080786"
     }
   },
   "parameters": {
     "clientId": {
-      "type": "string"
-    },
-    "identifier": {
       "type": "string",
-      "defaultValue": "[resourceGroup().name]"
+      "metadata": {
+        "description": "The Entra ID client ID used for authentication."
+      }
+    },
+    "resourceLabel": {
+      "type": "string",
+      "defaultValue": "[uniqueString(resourceGroup().id)]",
+      "minLength": 3,
+      "maxLength": 30,
+      "metadata": {
+        "description": "Optional suffix used for naming Azure resources and as the public DNS label. Must be alphanumeric and lowercase. If not provided, one is derived from the resource group name."
+      }
     },
     "location": {
       "type": "string",
-      "defaultValue": "[resourceGroup().location]"
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "The Azure region for resource deployment. Defaults to the resource group location."
+      }
     }
   },
   "variables": {
-    "aksName": "[format('mg-aks-{0}', parameters('identifier'))]",
-    "acrName": "[format('acr{0}', parameters('identifier'))]",
-    "cosmosDbAccountName": "[format('cosmos{0}', parameters('identifier'))]",
-    "userAssignedIdentityName": "[format('mg-identity-{0}', parameters('identifier'))]",
-    "appInsightsName": "[format('mg-ai-{0}', parameters('identifier'))]",
-    "vnetName": "[format('mg-vnet-{0}', parameters('identifier'))]",
-    "aksSubnetName": "[format('aks-subnet-{0}', parameters('identifier'))]",
-    "appGwSubnetName": "[format('mg-subnet-{0}', parameters('identifier'))]",
-    "appGwName": "[format('mg-aag-{0}', parameters('identifier'))]",
-    "domainNameLabel": "[parameters('identifier')]"
+    "aksName": "[format('mg-aks-{0}', parameters('resourceLabel'))]",
+    "acrName": "[format('mgreg{0}', parameters('resourceLabel'))]",
+    "cosmosDbAccountName": "[format('mg-storage-{0}', parameters('resourceLabel'))]",
+    "userAssignedIdentityName": "[format('mg-identity-{0}', parameters('resourceLabel'))]",
+    "appInsightsName": "[format('mg-ai-{0}', parameters('resourceLabel'))]",
+    "vnetName": "[format('mg-vnet-{0}', parameters('resourceLabel'))]",
+    "aksSubnetName": "[format('mg-aks-subnet-{0}', parameters('resourceLabel'))]",
+    "appGwSubnetName": "[format('mg-aag-subnet-{0}', parameters('resourceLabel'))]",
+    "appGwName": "[format('mg-aag-{0}', parameters('resourceLabel'))]",
+    "publicIpName": "[format('mg-pip-{0}', parameters('resourceLabel'))]",
+    "federatedCredName": "[format('mg-sa-federation-{0}', parameters('resourceLabel'))]"
   },
   "resources": [
     {
@@ -164,7 +176,7 @@
     {
       "type": "Microsoft.Network/publicIPAddresses",
       "apiVersion": "2022-05-01",
-      "name": "[format('mg-pip-{0}', parameters('identifier'))]",
+      "name": "[variables('publicIpName')]",
       "location": "[parameters('location')]",
       "sku": {
         "name": "Standard"
@@ -172,7 +184,7 @@
       "properties": {
         "publicIPAllocationMethod": "Static",
         "dnsSettings": {
-          "domainNameLabel": "[variables('domainNameLabel')]"
+          "domainNameLabel": "[parameters('resourceLabel')]"
         }
       }
     },
@@ -202,7 +214,7 @@
             "name": "appGwFrontendIP",
             "properties": {
               "publicIPAddress": {
-                "id": "[resourceId('Microsoft.Network/publicIPAddresses', format('mg-pip-{0}', parameters('identifier')))]"
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))]"
               }
             }
           }
@@ -295,7 +307,7 @@
         ]
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Network/publicIPAddresses', format('mg-pip-{0}', parameters('identifier')))]",
+        "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))]",
         "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
       ]
     },
@@ -344,7 +356,7 @@
     {
       "type": "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials",
       "apiVersion": "2023-01-31",
-      "name": "[format('{0}/{1}', variables('userAssignedIdentityName'), format('mg-sa-federation-{0}', parameters('identifier')))]",
+      "name": "[format('{0}/{1}', variables('userAssignedIdentityName'), variables('federatedCredName'))]",
       "properties": {
         "audiences": [
           "api://AzureADTokenExchange"
@@ -469,7 +481,7 @@
         "azCliVersion": "2.60.0",
         "timeout": "PT30M",
         "retentionInterval": "P1D",
-        "scriptContent": "      sed -i \"s|\\${AZURE_CLIENT_ID}|$AZURE_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${TENANT_ID}|$TENANT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${CLIENT_ID}|$CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${IDENTIFIER}|$ResourceGroupName|g\" cloud-deployment-template.yml\r\n\r\n      az aks command invoke -g $ResourceGroupName -n mg-aks-\"$ResourceGroupName\" --command \"kubectl apply -f cloud-deployment-template.yml\" --file cloud-deployment-template.yml\r\n    ",
+        "scriptContent": "      sed -i \"s|\\${AZURE_CLIENT_ID}|$AZURE_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${TENANT_ID}|$TENANT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${CLIENT_ID}|$CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${IDENTIFIER}|$IDENTIFIER|g\" cloud-deployment-template.yml\r\n\r\n      az aks command invoke -g $ResourceGroupName -n mg-aks-\"$ResourceGroupName\" --command \"kubectl apply -f cloud-deployment-template.yml\" --file cloud-deployment-template.yml\r\n    ",
         "supportingScriptUris": [
           "https://raw.githubusercontent.com/microsoft/mcp-gateway/refs/heads/llx18/cd1/deployment/k8s/cloud-deployment-template.yml"
         ],
@@ -489,6 +501,10 @@
           {
             "name": "ResourceGroupName",
             "value": "[resourceGroup().name]"
+          },
+          {
+            "name": "IDENTIFIER",
+            "value": "[parameters('resourceLabel')]"
           },
           {
             "name": "TENANT_ID",
