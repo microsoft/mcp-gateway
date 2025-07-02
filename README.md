@@ -183,16 +183,13 @@ The cloud-deployed service needs authentication. Here we configure the basic bea
 
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fmicrosoft%2Fmcp-gateway%2Fmain%2Fdeployment%2Finfra%2Fazure-deployment.json)
 
-**Parameters:**
-
-**Parameters:**
-
-| Name              | Description                                                                                   |
-|-------------------|-----------------------------------------------------------------------------------------------|
-| `resourceGroup`   | The name of the resource group. Must be all lowercase letters and numbers.                   |
-| `clientId`        | The Entra ID (AAD) client ID from your app registration.                                     |
-| `location`        | *(Optional)* The Azure region where resources will be deployed. Defaults to the resource group location.  |
-| `resourceLabel`   | *(Optional)* A lowercase alphanumeric suffix used to name resources and as the DNS label.<br/>If not provided, a unique value will be derived from the resource group name. We suggest to set this value and keep it same with the resource group name. |
+**Parameters**
+| Name              | Description                                                                                                      |
+|-------------------|------------------------------------------------------------------------------------------------------------------|
+| `resourceGroup`   | The name of the resource group. Must contain only lowercase letters and numbers (alphanumeric).                 |
+| `clientId`        | The Entra ID (Azure AD) client ID from your app registration.                                                    |
+| `location`        | *(Optional)* The Azure region where resources will be deployed.<br/>Defaults to the resource group's location.   |
+| `resourceLabel`   | *(Optional)* A lowercase alphanumeric string used as a suffix for naming resources and as the DNS label.<br/>If not provided, a deterministic unique value will be generated based on the resource group name.<br/>**Recommendation:** Set this value manually and keep it the same as the resource group name for easier identification and consistency. |
 
 
 The deployment will:
@@ -268,7 +265,7 @@ docker push mgreg<resourceLabel>.azurecr.io/mcp-example:1.0.0
      - `http://<resourceLabel>.<location>.cloudapp.azure.com/adapters/{name}/sse` (SSE)
 
 ### 6. Clean the Environment
-To remove all deployed resources, delete the Azure resource group:
+To remove all deployed resources, delete the resource group from Azure portal or run:
 ```sh
 az group delete --name <resourceGroupName> --yes
 ```
