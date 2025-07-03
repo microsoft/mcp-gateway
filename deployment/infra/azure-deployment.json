@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.36.1.42791",
-      "templateHash": "5442726689548792895"
+      "templateHash": "6049263710483507915"
     }
   },
   "parameters": {
@@ -17,7 +17,7 @@
     },
     "resourceLabel": {
       "type": "string",
-      "defaultValue": "[uniqueString(resourceGroup().id)]",
+      "defaultValue": "[resourceGroup().name]",
       "minLength": 3,
       "maxLength": 30,
       "metadata": {

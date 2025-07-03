@@ -169,15 +169,45 @@ kubectl port-forward -n adapter svc/mcpgateway-service 8000:8000
 ### 1. Prepare Cloud Development Environment
 - An active [Azure subscription](https://azure.microsoft.com) with **Owner** access
 - [Install Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
-- [Install Docker Desktop](https://docs.docker.com/desktop/)
 
 ### 2. Setup Entra ID (Azure Active Directory)
-The cloud-deployed service needs authentication. Here we configure the basic bearer token authentication using Azure Entra ID.
-- Go to [App Registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)
-- Create a **single-tenant** app registration
-- Add a platform - Mobile and desktop applications
-- Under **Redirect URIs**, add: `http://localhost`
-- Copy the **Application (client) ID** and **Directory (tenant) ID** from the overview page
+
+The cloud-deployed service requires bearer token authentication using Azure Entra ID. Follow these steps to configure an app registration.
+
+#### Create and Configure the App Registration
+
+1. Go to [App Registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)
+2. Click **+ New registration**
+   - **Name**: Choose a meaningful name, e.g., `mcp-gateway`
+   - **Supported account types**: Select **Single tenant**
+   - Click **Register**
+
+3. Go to the app registration **Overview** and copy:
+   - **Application (client) ID** — this is your API Client ID for deployment
+
+#### Expose an API (Define a Scope)
+
+1. In the left menu, go to **Expose an API**
+2. Click **Add** next to **Application ID URI**, and leave it as the default value:
+   ```
+   api://<your-client-id>
+   ```
+
+3. Click **+ Add a scope**
+   - **Scope name**: `access`
+   - **Admin consent display name**: `Access MCP Gateway`
+   - **Admin consent Description**: Any brief description
+   - Click **Add scope**
+
+#### Authorize Azure CLI as a Client Application
+
+To allow Azure CLI to work as the client for token acquisition.
+
+1. Still in **Expose an API**, scroll down to **Authorized client applications**
+2. Click **+ Add a client application**
+   - **Client ID**: `04b07795-8ddb-461a-bbee-02f9e1bf7b46` (Azure CLI)
+   - In Authorized scopes, select the scope `access`
+   - Click **Add**
 
 ### 3. Deploy Service Resources
 
@@ -189,7 +219,7 @@ The cloud-deployed service needs authentication. Here we configure the basic bea
 | `resourceGroup`   | The name of the resource group. Must contain only lowercase letters and numbers (alphanumeric).                 |
 | `clientId`        | The Entra ID (Azure AD) client ID from your app registration.                                                    |
 | `location`        | *(Optional)* The Azure region where resources will be deployed.<br/>Defaults to the resource group's location.   |
-| `resourceLabel`   | *(Optional)* A lowercase alphanumeric string used as a suffix for naming resources and as the DNS label.<br/>If not provided, a deterministic unique value will be generated based on the resource group name.<br/>**Recommendation:** Set this value manually and keep it the same as the resource group name for easier identification and consistency. |
+| `resourceLabel`   | *(Optional)* A lowercase alphanumeric string used as a suffix for naming resources and as the DNS label.<br/>If not provided, it will be the resourceGroup name.<br/>**Recommendation:** Set this value as the default the same with resource group name and make sure resouce group name contains only lower alphanumeric. |
 
 
 The deployment will:
@@ -213,30 +243,19 @@ The deployment will:
 ### 4. Build & Publish MCP Server Images
 The gateway service pulls the MCP server image from the newly provisioned Azure Container Registry (ACR) during deployment.
 
-Build and push the MCP server image to ACR:
-> **Note:** Ensure that Docker Engine is running before proceeding.
+Build the MCP server image in ACR:
 
 ```sh
-az acr login -n mgreg<resourceLabel>
-docker build -f mcp-example-server/Dockerfile mcp-example-server -t mgreg<resourceLabel>.azurecr.io/mcp-example:1.0.0
-docker push mgreg<resourceLabel>.azurecr.io/mcp-example:1.0.0
+az acr build -r "mgreg$resourceLabel" -f mcp-example-server/Dockerfile mcp-example-server -t "mgreg$resourceLabel.azurecr.io/mcp-example:1.0.0"
 ```
 
 ### 5. Test the API
 
 - Import the OpenAPI spec from `openapi/mcp-gateway.openapi.json` into [Postman](https://www.postman.com/), [Bruno](https://www.usebruno.com/), or [Swagger Editor](https://editor.swagger.io/)
 
-- Acquire a bearer token using this python script locally:
+- Acquire a bearer token locally:
   ```sh
-  pip install azure-identity
-  ```
-  ```python
-  from azure.identity import InteractiveBrowserCredential
-  tenant_id = "<your-tenant-id>"
-  client_id = "<your-client-id>"
-  credential = InteractiveBrowserCredential(tenant_id=tenant_id, client_id=client_id)
-  access_token = credential.get_token(f"{client_id}/.default").token
-  print(access_token)
+  az account get-access-token --resource $clientId
   ```
 
 - Send a POST request to create an adapter resource:
@@ -270,7 +289,7 @@ To remove all deployed resources, delete the resource group from Azure portal or
 az group delete --name <resourceGroupName> --yes
 ```
 
-### 7. Production Onboarding (Follow-up)
+### 7. Production Onboarding
 
 - **TLS Configuration**  
   Set up HTTPS on Azure Application Gateway (AAG) listener using valid TLS certificates.

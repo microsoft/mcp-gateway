@@ -5,7 +5,7 @@ param clientId string
 @minLength(3)
 @maxLength(30)
 @description('Optional suffix used for naming Azure resources and as the public DNS label. Must be alphanumeric and lowercase. If not provided, one is derived from the resource group name.')
-param resourceLabel string = uniqueString(resourceGroup().id)
+param resourceLabel string = resourceGroup().name
 
 @description('The Azure region for resource deployment. Defaults to the resource group location.')
 param location string = resourceGroup().location
