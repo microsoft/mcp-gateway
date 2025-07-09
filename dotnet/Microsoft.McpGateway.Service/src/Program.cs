@@ -43,7 +43,7 @@ else
         options.ResourceMetadata = new()
         {
             Resource = new Uri($"api://{azureAdConfig["ClientId"]}"),
-            AuthorizationServers = { new Uri($"https://login.microsoftonline.com/{azureAdConfig["tenantId"]}/v2.0") },
+            AuthorizationServers = { new Uri($"https://login.microsoftonline.com/{azureAdConfig["TenantId"]}/v2.0") },
             ScopesSupported = [$"api://{azureAdConfig["ClientId"]}/.default"]
         };
     })
