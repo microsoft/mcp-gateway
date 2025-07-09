@@ -224,7 +224,7 @@ To allow Azure CLI & VS Code to work as the client for token acquisition.
 
 ### 3. Deploy Service Resources
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fmicrosoft%2Fmcp-gateway%2Fmain%2Fdeployment%2Finfra%2Fazure-deployment.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fmicrosoft%2Fmcp-gateway%2Flilx%2Fa1%2Fdeployment%2Finfra%2Fazure-deployment.json)
 
 **Parameters**
 | Name              | Description                                                                                                      |

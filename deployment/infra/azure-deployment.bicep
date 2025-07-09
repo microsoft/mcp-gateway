@@ -425,7 +425,7 @@ resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01'
       az aks command invoke -g $ResourceGroupName -n mg-aks-"$ResourceGroupName" --command "kubectl apply -f cloud-deployment-template.yml" --file cloud-deployment-template.yml
     '''
     supportingScriptUris: [
-      'https://raw.githubusercontent.com/microsoft/mcp-gateway/refs/heads/main/deployment/k8s/cloud-deployment-template.yml'
+      'https://raw.githubusercontent.com/microsoft/mcp-gateway/refs/heads/lilx/a1/deployment/k8s/cloud-deployment-template.yml'
     ]
     environmentVariables: [
       {
