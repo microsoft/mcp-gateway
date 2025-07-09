@@ -91,24 +91,24 @@ flowchart LR
 
 ## Getting Started - Local Deployment
 
-### 1. **Prepare Local Development Environment**  
+### 1. Prepare Local Development Environment
 - [Install .NET 8 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
 - [Install Docker Desktop](https://docs.docker.com/desktop/)
 - [Install and turn on Kubernetes](https://docs.docker.com/desktop/features/kubernetes/#install-and-turn-on-kubernetes)
 
-### 2. **Run Local Docker Registry**  
+### 2. Run Local Docker Registry
    ```sh
    docker run -d -p 5000:5000 --name registry registry:2.7
    ```
 
-### 3. **Build & Publish MCP Server Images**  
+### 3. Build & Publish MCP Server Images
 Build and push the MCP server images to your local registry (`localhost:5000`).
 ```sh
 docker build -f mcp-example-server/Dockerfile mcp-example-server -t localhost:5000/mcp-example:1.0.0
 docker push localhost:5000/mcp-example:1.0.0
 ```
 
-### 4. **Build & Publish MCP Gateway**  
+### 4. Build & Publish MCP Gateway
 (Optional) Open `dotnet/Microsoft.McpGateway.sln` with Visual Studio.
 
 Publish the MCP Gateway image by right-clicking `Publish` on `Microsoft.McpGateway.Service` in Visual Studio, or run:
@@ -116,20 +116,19 @@ Publish the MCP Gateway image by right-clicking `Publish` on `Microsoft.McpGatew
 dotnet publish dotnet/Microsoft.McpGateway.Service/src/Microsoft.McpGateway.Service.csproj -c Release /p:PublishProfile=localhost_5000.pubxml
 ```
 
-### 5. **Deploy MCP Gateway to Kubernetes Cluster**  
+### 5. Deploy MCP Gateway to Kubernetes Cluster
 Apply the deployment manifests:
 ```sh
 kubectl apply -f deployment/k8s/local-deployment.yml
 ```
 
-### 6. **Enable Port Forwarding**  
+### 6. Enable Port Forwarding
 Forward the gateway service port:
 ```sh
 kubectl port-forward -n adapter svc/mcpgateway-service 8000:8000
 ```
 
-### 7. **Test the API**  
-
+### 7. Test the API - MCP Server Management
 - Import the OpenAPI definition from `openapi/mcp-gateway.openapi.json` into tools like [Postman](https://www.postman.com/), [Bruno](https://www.usebruno.com/), or [Swagger Editor](https://editor.swagger.io/).
 
 - Send a request to create a new adapter resource:
@@ -146,16 +145,29 @@ kubectl port-forward -n adapter svc/mcpgateway-service 8000:8000
    }
    ```
 
-- After deploying the MCP server, use a client like [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector) to test the connection.
+### 8. Test the API - MCP Server Access 
+- After deploying the MCP server, use a client like [VS Code](https://code.visualstudio.com/) to test the connection. Refer to the guide: [Use MCP servers in VS Code (Preview)](https://code.visualstudio.com/docs/copilot/chat/mcp-servers). 
+  > **Note:** Ensure VSCode is up to date to access the latest MCP features.
 
-   To connect to the deployed `mcp-example` server, use:  
-   - `http://localhost:8000/adapters/mcp-example/mcp` (Streamable HTTP)
+  - To connect to the deployed `mcp-example` server, use:  
+     - `http://localhost:8000/adapters/mcp-example/mcp` (Streamable HTTP)
 
-   For other servers:  
-   - `http://localhost:8000/adapters/{name}/mcp` (Streamable HTTP)  
-   - `http://localhost:8000/adapters/{name}/sse` (SSE)
+  Sample `.vscode/mcp.json` that connects to the `mcp-example` server
+  ```json
+  {
+    "servers": {
+      "mcp-example": {
+        "url": "http://localhost:8000/adapters/mcp-example/mcp",
+      }
+    }
+  }
+  ```
 
-### 8. **Clean the Environment**  
+- For other servers:  
+  - `http://localhost:8000/adapters/{name}/mcp` (Streamable HTTP)  
+  - `http://localhost:8000/adapters/{name}/sse` (SSE)
+
+### 9. Clean the Environment  
    To remove all deployed resources, delete the Kubernetes namespace:
    ```sh
    kubectl delete namespace adapter
@@ -199,13 +211,14 @@ The cloud-deployed service requires bearer token authentication using Azure Entr
    - **Admin consent Description**: Any brief description
    - Click **Add scope**
 
-#### Authorize Azure CLI as a Client Application
+#### Authorize Azure CLI & VS Code as a Client Application
 
-To allow Azure CLI to work as the client for token acquisition.
+To allow Azure CLI & VS Code to work as the client for token acquisition.
 
 1. Still in **Expose an API**, scroll down to **Authorized client applications**
 2. Click **+ Add a client application**
    - **Client ID**: `04b07795-8ddb-461a-bbee-02f9e1bf7b46` (Azure CLI)
+   - **Client ID**: `aebc6443-996d-45c2-90f0-388ff96faa56` (VS Code)
    - In Authorized scopes, select the scope `access`
    - Click **Add**
 
@@ -249,7 +262,7 @@ Build the MCP server image in ACR:
 az acr build -r "mgreg$resourceLabel" -f mcp-example-server/Dockerfile mcp-example-server -t "mgreg$resourceLabel.azurecr.io/mcp-example:1.0.0"
 ```
 
-### 5. Test the API
+### 5. Test the API - MCP Server Management
 
 - Import the OpenAPI spec from `openapi/mcp-gateway.openapi.json` into [Postman](https://www.postman.com/), [Bruno](https://www.usebruno.com/), or [Swagger Editor](https://editor.swagger.io/)
 
@@ -273,23 +286,37 @@ az acr build -r "mgreg$resourceLabel" -f mcp-example-server/Dockerfile mcp-examp
   }
   ```
 
-- After deploying the MCP server, use a client like [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector) to test the connection. 
-  > **Note:** A valid bearer token is still required in the Authorization header when connecting to the server.
+### 6. Test the API - MCP Server Access
+
+- After deploying the MCP server, use a client like [VS Code](https://code.visualstudio.com/) to test the connection. Refer to the guide: [Use MCP servers in VS Code (Preview)](https://code.visualstudio.com/docs/copilot/chat/mcp-servers). 
+  > **Note:** Ensure VSCode is up to date to access the latest MCP features.
 
   - To connect to the deployed `mcp-example` server, use:  
      - `http://<resourceLabel>.<location>.cloudapp.azure.com/adapters/mcp-example/mcp` (Streamable HTTP)
 
-  - For other servers:  
-     - `http://<resourceLabel>.<location>.cloudapp.azure.com/adapters/{name}/mcp` (Streamable HTTP)  
-     - `http://<resourceLabel>.<location>.cloudapp.azure.com/adapters/{name}/sse` (SSE)
+  Sample `.vscode/mcp.json` that connects to the `mcp-example` server
+  ```json
+  {
+    "servers": {
+      "mcp-example": {
+        "url": "http://<resourceLabel>.<location>.cloudapp.azure.com/adapters/mcp-example/mcp",
+      }
+    }
+  }
+  ```
+  > **Note:** Authentication is still required to access the MCP server, VS Code will help handle the authentication process.
 
-### 6. Clean the Environment
+- For other servers:  
+  - `http://<resourceLabel>.<location>.cloudapp.azure.com/adapters/{name}/mcp` (Streamable HTTP)  
+  - `http://<resourceLabel>.<location>.cloudapp.azure.com/adapters/{name}/sse` (SSE)
+
+### 7. Clean the Environment
 To remove all deployed resources, delete the resource group from Azure portal or run:
 ```sh
 az group delete --name <resourceGroupName> --yes
 ```
 
-### 7. Production Onboarding
+### 8. Production Onboarding
 
 - **TLS Configuration**  
   Set up HTTPS on Azure Application Gateway (AAG) listener using valid TLS certificates.

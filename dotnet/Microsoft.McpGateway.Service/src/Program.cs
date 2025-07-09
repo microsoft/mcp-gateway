@@ -12,6 +12,7 @@ using Microsoft.McpGateway.Management.Service;
 using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Service.Routing;
 using Microsoft.McpGateway.Service.Session;
+using ModelContextProtocol.AspNetCore.Authentication;
 
 var builder = WebApplication.CreateBuilder(args);
 var credential = new DefaultAzureCredential();
@@ -31,8 +32,22 @@ if (builder.Environment.IsDevelopment())
 }
 else
 {
-    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-        .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
+    var azureAdConfig = builder.Configuration.GetSection("AzureAd");
+    builder.Services.AddAuthentication(options =>
+    {
+        options.DefaultChallengeScheme = McpAuthenticationDefaults.AuthenticationScheme;
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddMcp(options =>
+    {
+        options.ResourceMetadata = new()
+        {
+            Resource = new Uri($"api://{azureAdConfig["ClientId"]}"),
+            AuthorizationServers = { new Uri($"https://login.microsoftonline.com/{azureAdConfig["tenantId"]}/v2.0") },
+            ScopesSupported = [$"api://{azureAdConfig["ClientId"]}/.default"]
+        };
+    })
+    .AddMicrosoftIdentityWebApi(azureAdConfig);
 
     builder.Services.AddSingleton<IAdapterResourceStore>(c =>
     {
