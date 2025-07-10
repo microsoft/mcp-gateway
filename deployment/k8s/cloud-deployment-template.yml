@@ -105,3 +105,5 @@ data:
   ApplicationInsights__ConnectionString: "${APPINSIGHTS_CONNECTION_STRING}"
 
   ContainerRegistrySettings__Endpoint: "mgreg${IDENTIFIER}.azurecr.io"
+
+  PublicEndpoint: "http://${IDENTIFIER}.${REGION}.cloudapp.azure.com/"

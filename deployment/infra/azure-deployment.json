@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.36.1.42791",
-      "templateHash": "6049263710483507915"
+      "templateHash": "4470748714752194409"
     }
   },
   "parameters": {
@@ -481,11 +481,15 @@
         "azCliVersion": "2.60.0",
         "timeout": "PT30M",
         "retentionInterval": "P1D",
-        "scriptContent": "      sed -i \"s|\\${AZURE_CLIENT_ID}|$AZURE_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${TENANT_ID}|$TENANT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${CLIENT_ID}|$CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${IDENTIFIER}|$IDENTIFIER|g\" cloud-deployment-template.yml\r\n\r\n      az aks command invoke -g $ResourceGroupName -n mg-aks-\"$ResourceGroupName\" --command \"kubectl apply -f cloud-deployment-template.yml\" --file cloud-deployment-template.yml\r\n    ",
+        "scriptContent": "      sed -i \"s|\\${AZURE_CLIENT_ID}|$AZURE_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${TENANT_ID}|$TENANT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${CLIENT_ID}|$CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${IDENTIFIER}|$IDENTIFIER|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${REGION}|$REGION|g\" cloud-deployment-template.yml\r\n\r\n      az aks command invoke -g $ResourceGroupName -n mg-aks-\"$ResourceGroupName\" --command \"kubectl apply -f cloud-deployment-template.yml\" --file cloud-deployment-template.yml\r\n    ",
         "supportingScriptUris": [
           "https://raw.githubusercontent.com/microsoft/mcp-gateway/refs/heads/main/deployment/k8s/cloud-deployment-template.yml"
         ],
         "environmentVariables": [
+          {
+            "name": "REGION",
+            "value": "[parameters('location')]"
+          },
           {
             "name": "CLIENT_ID",
             "value": "[parameters('clientId')]"
