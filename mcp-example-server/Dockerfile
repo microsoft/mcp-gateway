@@ -8,7 +8,8 @@ WORKDIR /app
 
 # Install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip --root-user-action=ignore
+RUN pip install --no-cache-dir -r requirements.txt --root-user-action=ignore
 
 # Copy source
 COPY . .
