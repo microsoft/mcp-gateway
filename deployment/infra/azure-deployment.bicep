@@ -421,6 +421,7 @@ resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01'
       sed -i "s|\${CLIENT_ID}|$CLIENT_ID|g" cloud-deployment-template.yml
       sed -i "s|\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g" cloud-deployment-template.yml
       sed -i "s|\${IDENTIFIER}|$IDENTIFIER|g" cloud-deployment-template.yml
+      sed -i "s|\${REGION}|$REGION|g" cloud-deployment-template.yml
 
       az aks command invoke -g $ResourceGroupName -n mg-aks-"$ResourceGroupName" --command "kubectl apply -f cloud-deployment-template.yml" --file cloud-deployment-template.yml
     '''
@@ -428,6 +429,10 @@ resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01'
       'https://raw.githubusercontent.com/microsoft/mcp-gateway/refs/heads/main/deployment/k8s/cloud-deployment-template.yml'
     ]
     environmentVariables: [
+      {
+        name: 'REGION'
+        value: location
+      }
       {
         name: 'CLIENT_ID'
         value: clientId
