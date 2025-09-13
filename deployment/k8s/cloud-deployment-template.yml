@@ -57,6 +57,14 @@ metadata:
   annotations:
     azure.workload.identity/client-id: "${AZURE_CLIENT_ID}"
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: workload-sa
+  namespace: adapter
+  annotations:
+    azure.workload.identity/client-id: "${WORKLOAD_CLIENT_ID}"
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -65,13 +73,16 @@ metadata:
 rules:
   - apiGroups: ["apps"]
     resources: ["statefulsets"]
-    verbs: ["get", "list", "create", "update", "delete"]
+    verbs: ["get", "list", "create", "update", "delete", "patch"]
   - apiGroups: [""]
     resources: ["services", "pods"]
     verbs: ["get", "list", "create", "update", "delete"]
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

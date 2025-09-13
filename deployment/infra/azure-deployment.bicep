@@ -280,9 +280,15 @@ resource uai 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   location: location
 }
 
-// User Assigned Identity for amdin
+// User Assigned Identity for admin
 resource uaiAdmin 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: '${userAssignedIdentityName}-admin'
+  location: location
+}
+
+// User Assigned Identity for server workload instance
+resource uaiWorkload 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${userAssignedIdentityName}-workload'
   location: location
 }
 
@@ -316,6 +322,19 @@ resource federatedCred 'Microsoft.ManagedIdentity/userAssignedIdentities/federat
     ]
     issuer: aks.properties.oidcIssuerProfile.issuerURL
     subject: 'system:serviceaccount:adapter:mcpgateway-sa'
+  }
+}
+
+// Federated Credential
+resource federatedCredWorkload 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: uaiWorkload
+  name: '${federatedCredName}-workload'
+  properties: {
+    audiences: [
+      'api://AzureADTokenExchange'
+    ]
+    issuer: aks.properties.oidcIssuerProfile.issuerURL
+    subject: 'system:serviceaccount:adapter:workload-sa'
   }
 }
 
@@ -417,6 +436,7 @@ resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01'
     retentionInterval: 'P1D'
     scriptContent: '''
       sed -i "s|\${AZURE_CLIENT_ID}|$AZURE_CLIENT_ID|g" cloud-deployment-template.yml
+      sed -i "s|\${WORKLOAD_CLIENT_ID}|$WORKLOAD_CLIENT_ID|g" cloud-deployment-template.yml
       sed -i "s|\${TENANT_ID}|$TENANT_ID|g" cloud-deployment-template.yml
       sed -i "s|\${CLIENT_ID}|$CLIENT_ID|g" cloud-deployment-template.yml
       sed -i "s|\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g" cloud-deployment-template.yml
@@ -440,6 +460,10 @@ resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01'
       {
         name: 'AZURE_CLIENT_ID'
         value: uai.properties.clientId
+      }
+      {
+        name: 'WORKLOAD_CLIENT_ID'
+        value: uaiWorkload.properties.clientId
       }
       {
         name: 'APPINSIGHTS_CONNECTION_STRING'

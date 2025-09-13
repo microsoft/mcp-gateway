@@ -13,6 +13,8 @@
 
 ## Overview
 
+#### *New*: Support for **Proxying Local & Remote MCP Servers**. See [examples and usage](mcp-proxy-server/README.md).
+
 This project provides:
 
 - A data gateway for routing traffic to MCP servers with session affinity.
@@ -146,7 +148,7 @@ kubectl port-forward -n adapter svc/mcpgateway-service 8000:8000
    ```
 
 ### 8. Test the API - MCP Server Access 
-- After deploying the MCP server, use a client like [VS Code](https://code.visualstudio.com/) to test the connection. Refer to the guide: [Use MCP servers in VS Code (Preview)](https://code.visualstudio.com/docs/copilot/chat/mcp-servers). 
+- After deploying the MCP server, use a client like [VS Code](https://code.visualstudio.com/) to test the connection. Refer to the guide: [Use MCP servers in VS Code](https://code.visualstudio.com/docs/copilot/chat/mcp-servers). 
   > **Note:** Ensure VSCode is up to date to access the latest MCP features.
 
   - To connect to the deployed `mcp-example` server, use:  
@@ -288,7 +290,7 @@ az acr build -r "mgreg$resourceLabel" -f mcp-example-server/Dockerfile mcp-examp
 
 ### 6. Test the API - MCP Server Access
 
-- After deploying the MCP server, use a client like [VS Code](https://code.visualstudio.com/) to test the connection. Refer to the guide: [Use MCP servers in VS Code (Preview)](https://code.visualstudio.com/docs/copilot/chat/mcp-servers). 
+- After deploying the MCP server, use a client like [VS Code](https://code.visualstudio.com/) to test the connection. Refer to the guide: [Use MCP servers in VS Code](https://code.visualstudio.com/docs/copilot/chat/mcp-servers). 
   > **Note:** Ensure VSCode is up to date to access the latest MCP features.
 
   - To connect to the deployed `mcp-example` server, use:  
