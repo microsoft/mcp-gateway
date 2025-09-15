@@ -32,7 +32,8 @@ namespace Microsoft.McpGateway.Management.Deployment
             var labels = new Dictionary<string, string>
             {
                 { $"{AdapterNamespace}/type", "mcp" },
-                { $"{AdapterNamespace}/name", request.Name }
+                { $"{AdapterNamespace}/name", request.Name },
+                { "azure.workload.identity/use", request.UseWorkloadIdentity.ToString().ToLowerInvariant() }
             };
 
             var statefulSet = new V1StatefulSet
@@ -48,6 +49,7 @@ namespace Microsoft.McpGateway.Management.Deployment
                         Metadata = new V1ObjectMeta { Labels = labels },
                         Spec = new V1PodSpec
                         {
+                            ServiceAccountName = "workload-sa",
                             SecurityContext = new V1PodSecurityContext
                             {
                                 RunAsUser = 1100,
@@ -72,7 +74,6 @@ namespace Microsoft.McpGateway.Management.Deployment
                                     SecurityContext = new V1SecurityContext
                                     {
                                         AllowPrivilegeEscalation = false,
-                                        ReadOnlyRootFilesystem = true,
                                         Capabilities = new V1Capabilities { Drop = ["ALL"] }
                                     },
                                     Resources = new V1ResourceRequirements

@@ -155,7 +155,7 @@ namespace Microsoft.McpGateway.Service.Controllers
 
             var newBaseUri = new Uri(newAddress, UriKind.Absolute);
             var path = '/' + string.Join('/', segments.Skip(2));
-            if (path.EndsWith("/messages") || path.EndsWith("/mcp"))
+            if (path.EndsWith("/messages"))
                 path += "/";
 
             var newUriBuilder = new UriBuilder(newBaseUri.Scheme, newBaseUri.Host, newBaseUri.Port)

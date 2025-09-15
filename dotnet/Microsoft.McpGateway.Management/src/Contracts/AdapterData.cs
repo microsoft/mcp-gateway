@@ -60,6 +60,12 @@ namespace Microsoft.McpGateway.Management.Contracts
         [JsonPropertyOrder(8)]
         public string Description { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Indicates whether to use workload identity for the deployed adapter instance. Default is false.
+        /// </summary>
+        [JsonPropertyOrder(9)]
+        public bool UseWorkloadIdentity { get; set; } = false;
+
         public AdapterData(
             string name,
             string imageName,
@@ -68,7 +74,8 @@ namespace Microsoft.McpGateway.Management.Contracts
             int? replicaCount = 1,
             string description = "",
             ServerProtocol protocol = ServerProtocol.MCP,
-            ConnectionType connectionType = ConnectionType.StreamableHttp)
+            ConnectionType connectionType = ConnectionType.StreamableHttp,
+            bool useWorkloadIdentity = false)
         {
             ArgumentException.ThrowIfNullOrEmpty(name);
             ArgumentException.ThrowIfNullOrEmpty(imageName);
@@ -82,6 +89,7 @@ namespace Microsoft.McpGateway.Management.Contracts
             EnvironmentVariables = environmentVariables ?? [];
             ReplicaCount = replicaCount ?? 1;
             Description = description;
+            UseWorkloadIdentity = useWorkloadIdentity;
         }
 
         public AdapterData() { }

@@ -1,0 +1,2 @@
+fastmcp==2.11.3
+validators==0.35.0

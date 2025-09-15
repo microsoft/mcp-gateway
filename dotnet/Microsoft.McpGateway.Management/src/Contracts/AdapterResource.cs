@@ -14,23 +14,23 @@ namespace Microsoft.McpGateway.Management.Contracts
         /// <summary>
         /// The ID of the user who created the adapter.
         /// </summary>
-        [JsonPropertyOrder(9)]
+        [JsonPropertyOrder(30)]
         public required string CreatedBy { get; set; }
 
         /// <summary>
         /// The date and time when the adapter was created.
         /// </summary>
-        [JsonPropertyOrder(10)]
+        [JsonPropertyOrder(31)]
         public DateTimeOffset CreatedAt { get; set; }
 
         /// <summary>
         /// The date and time when the adapter was created.
         /// </summary>
-        [JsonPropertyOrder(11)]
+        [JsonPropertyOrder(32)]
         public DateTimeOffset LastUpdatedAt { get; set; }
 
         public AdapterResource(AdapterData adapterData, string createdBy, DateTimeOffset createdAt, DateTimeOffset lastUpdatedAt)
-            : base(adapterData.Name, adapterData.ImageName, adapterData.ImageVersion, adapterData.EnvironmentVariables, adapterData.ReplicaCount, adapterData.Description, adapterData.Protocol, adapterData.ConnectionType)
+            : base(adapterData.Name, adapterData.ImageName, adapterData.ImageVersion, adapterData.EnvironmentVariables, adapterData.ReplicaCount, adapterData.Description, adapterData.Protocol, adapterData.ConnectionType, adapterData.UseWorkloadIdentity)
         {
             CreatedBy = createdBy;
             CreatedAt = createdAt;
@@ -51,7 +51,8 @@ namespace Microsoft.McpGateway.Management.Contracts
                 ConnectionType = data.ConnectionType,
                 CreatedBy = createdBy,
                 CreatedAt = createdAt,
-                LastUpdatedAt = DateTime.UtcNow
+                LastUpdatedAt = DateTime.UtcNow,
+                UseWorkloadIdentity = data.UseWorkloadIdentity
             };
 
         public AdapterResource() { }
