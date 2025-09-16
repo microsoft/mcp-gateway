@@ -234,7 +234,7 @@ To allow Azure CLI & VS Code to work as the client for token acquisition.
 | `resourceGroup`   | The name of the resource group. Must contain only lowercase letters and numbers (alphanumeric).                 |
 | `clientId`        | The Entra ID (Azure AD) client ID from your app registration.                                                    |
 | `location`        | *(Optional)* The Azure region where resources will be deployed.<br/>Defaults to the resource group's location.   |
-| `resourceLabel`   | *(Optional)* A lowercase alphanumeric string used as a suffix for naming resources and as the DNS label.<br/>If not provided, it will be the resourceGroup name.<br/>**Recommendation:** Set this value as the default the same with resource group name and make sure resouce group name contains only lower alphanumeric. |
+| `resourceLabel`   | *(Optional)* A lowercase alphanumeric string used as a suffix for naming resources and as the DNS label.<br/>If not provided, it will be the resourceGroup name.<br/>**Recommendation:** Set this value as the default the same with resource group name and make sure resource group name contains only lower alphanumeric. |
 
 
 The deployment will:
