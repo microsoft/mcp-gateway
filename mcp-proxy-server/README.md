@@ -25,10 +25,10 @@ With this, you can transform **local-only MCP servers** into **cloud-accessible 
 
 - Configure permissions for the workload identity principal (If setting up a local mcp server)
 `mg-identity-<identifier>-workload`. 
-This identity is created by deployment. The MCP server will use the workload identity for upstream resouce access.
+This identity is created by deployment. The MCP server will use the workload identity for upstream resource access.
 
 ### Proxying Local Servers
-For starting a local MCP server in stdio and proxying the traffice through gateway to it.
+For starting a local MCP server in stdio and proxying the traffic through gateway to it.
 Set server startup command and arguments in environment variables:
   - `MCP_COMMAND`
   - `MCP_ARGS`
@@ -38,7 +38,7 @@ Set `useWorkloadIdentity` to be true if need the server to use the workload iden
   > **Note:** When using a bridged local server, certain system packages may be missing by default. To address this, you can install the required packages within a custom Dockerfile and build your own `mcp-proxy` image.
 
 ### Proxying Remote Servers
-For proxying another internal mcp server hosted in streamable HTTP. Set the target ednpoint in environment variable
+For proxying another internal mcp server hosted in streamable HTTP. Set the target endpoint in environment variable
   - `MCP_PROXY_URL`
 
 
@@ -49,7 +49,7 @@ Example payloads to send to `mcp-gateway` using the `POST /adapters` endpoint to
 #### Example 1: Bridged [Azure MCP Server](https://github.com/microsoft/mcp/tree/main/servers/Azure.Mcp.Server)
 ```json
 {
-  "name": "ado-remote",
+  "name": "azure-remote",
   "imageName": "mcp-proxy",
   "imageVersion": "1.0.0",
   "environmentVariables": {
@@ -58,14 +58,14 @@ Example payloads to send to `mcp-gateway` using the `POST /adapters` endpoint to
     "AZURE_MCP_INCLUDE_PRODUCTION_CREDENTIALS": "true",
     "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT": "1"
   },
-  "description": "Bridged ADO local MCP server"
+  "description": "Bridged Azure local MCP server"
 }
 ```
 
 #### Example 2: Bridged [Azure AI Foundry MCP Server](https://github.com/azure-ai-foundry/mcp-foundry)
 ```json
 {
-  "name": "foundry",
+  "name": "foundry-remote",
   "imageName": "mcp-proxy",
   "imageVersion": "1.0.0",
   "environmentVariables": {
