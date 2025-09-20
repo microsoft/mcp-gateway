@@ -38,7 +38,10 @@ else
         options.DefaultChallengeScheme = McpAuthenticationDefaults.AuthenticationScheme;
         options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
     })
-    .AddMcp(options =>
+    .AddScheme<McpAuthenticationOptions, McpSubPathAwareAuthenticationHandler>(
+        McpAuthenticationDefaults.AuthenticationScheme,
+        McpAuthenticationDefaults.DisplayName,
+    options =>
     {
         options.ResourceMetadata = new()
         {
