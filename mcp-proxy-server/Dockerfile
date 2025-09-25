@@ -30,10 +30,13 @@ RUN adduser --disabled-password --gecos '' --uid 1100 mcpuser
 
 WORKDIR /app
 
+# Install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip --root-user-action=ignore
+RUN pip install --no-cache-dir -r requirements.txt --root-user-action=ignore
 
-COPY src/main.py /app/main.py
+# Copy source
+COPY . .
 
 # Change ownership to non-root user
 RUN chown -R mcpuser:mcpuser /app \
@@ -44,4 +47,4 @@ USER 1100
 
 EXPOSE 8080
 
-ENTRYPOINT ["python", "/app/main.py"]
+CMD ["fastmcp", "run", "src/main.py:app", "--transport", "streamable-http", "--port", "8000", "--host", "0.0.0.0"]
