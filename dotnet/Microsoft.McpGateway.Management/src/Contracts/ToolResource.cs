@@ -1,43 +1,39 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Microsoft.McpGateway.Management.Contracts
 {
-    public class AdapterResource : AdapterData
+    /// <summary>
+    /// Represents a tool resource with metadata.
+    /// </summary>
+    public class ToolResource : ToolData
     {
         [JsonPropertyOrder(-1)]
         [JsonPropertyName("id")]
         public required string Id { get; set; }
 
         /// <summary>
-        /// The ID of the user who created the adapter.
+        /// The ID of the user who created the tool.
         /// </summary>
         [JsonPropertyOrder(30)]
         public required string CreatedBy { get; set; }
 
         /// <summary>
-        /// The date and time when the adapter was created.
+        /// The date and time when the tool was created.
         /// </summary>
         [JsonPropertyOrder(31)]
         public DateTimeOffset CreatedAt { get; set; }
 
         /// <summary>
-        /// The date and time when the adapter was created.
+        /// The date and time when the tool was last updated.
         /// </summary>
         [JsonPropertyOrder(32)]
         public DateTimeOffset LastUpdatedAt { get; set; }
 
-        public AdapterResource(AdapterData adapterData, string createdBy, DateTimeOffset createdAt, DateTimeOffset lastUpdatedAt)
-            : base(adapterData.Name, adapterData.ImageName, adapterData.ImageVersion, adapterData.EnvironmentVariables, adapterData.ReplicaCount, adapterData.Description, adapterData.UseWorkloadIdentity)
-        {
-            CreatedBy = createdBy;
-            CreatedAt = createdAt;
-            LastUpdatedAt = lastUpdatedAt;
-        }
-
-        public static AdapterResource Create(AdapterData data, string createdBy, DateTimeOffset createdAt) =>
+        public static ToolResource Create(ToolData data, string createdBy, DateTimeOffset createdAt) =>
             new()
             {
                 Id = data.Name,
@@ -47,12 +43,13 @@ namespace Microsoft.McpGateway.Management.Contracts
                 EnvironmentVariables = data.EnvironmentVariables,
                 ReplicaCount = data.ReplicaCount,
                 Description = data.Description,
+                UseWorkloadIdentity = data.UseWorkloadIdentity,
+                ToolDefinition = data.ToolDefinition,
                 CreatedBy = createdBy,
                 CreatedAt = createdAt,
-                LastUpdatedAt = DateTime.UtcNow,
-                UseWorkloadIdentity = data.UseWorkloadIdentity
+                LastUpdatedAt = DateTimeOffset.UtcNow,
             };
 
-        public AdapterResource() { }
+        public ToolResource() { }
     }
 }

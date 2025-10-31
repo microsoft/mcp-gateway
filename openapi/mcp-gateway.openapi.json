@@ -230,6 +230,267 @@
           }
         }
       }
+    },
+    "/tools": {
+      "post": {
+        "summary": "Register and deploy a new tool with MCP tool definition",
+        "description": "Creates a tool deployment that includes tool definition metadata for routing by the tool gateway router",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolData"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Tool created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolResource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          }
+        }
+      },
+      "get": {
+        "summary": "List all registered tools the user can access",
+        "responses": {
+          "200": {
+            "description": "List of tools",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ToolResource"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tools/{name}": {
+      "get": {
+        "summary": "Retrieve metadata for a specific tool",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tool metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolResource"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tool not found"
+          }
+        }
+      },
+      "put": {
+        "summary": "Update a tool deployment",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolData"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tool updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolResource"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "404": {
+            "description": "Tool not found"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove a registered tool",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Tool deleted"
+          },
+          "400": {
+            "description": "Bad request"
+          }
+        }
+      }
+    },
+    "/tools/{name}/status": {
+      "get": {
+        "summary": "Check the deployment status of a tool",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tool deployment status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "readyReplicas": {
+                      "type": "integer"
+                    },
+                    "updatedReplicas": {
+                      "type": "integer"
+                    },
+                    "availableReplicas": {
+                      "type": "integer"
+                    },
+                    "image": {
+                      "type": "string"
+                    },
+                    "replicaStatus": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tool not found"
+          }
+        }
+      }
+    },
+    "/tools/{name}/logs": {
+      "get": {
+        "summary": "Access the tool server's running logs",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instance",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0
+            },
+            "description": "The instance index (0-based) of the tool pod to retrieve logs from"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Log output",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tool not found"
+          }
+        }
+      }
+    },
+    "/mcp": {
+      "post": {
+        "summary": "Establish a streamable HTTP connection to the tool gateway router",
+        "description": "Routes MCP requests to the tool gateway router, which dynamically routes to registered tools based on tool definitions. The router handles multiple instances behind the gateway for scalability.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "MCP protocol request payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP response from the tool gateway router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "MCP protocol response payload"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable - no router instances available"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -274,6 +535,163 @@
           "lastUpdatedAt": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "ToolData": {
+        "type": "object",
+        "required": ["name", "imageName", "imageVersion", "toolDefinition"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Unique name of the tool, must match the tool name in toolDefinition"
+          },
+          "imageName": {
+            "type": "string",
+            "description": "Container image name for the tool server"
+          },
+          "imageVersion": {
+            "type": "string",
+            "description": "Container image version/tag"
+          },
+          "toolDefinition": {
+            "$ref": "#/components/schemas/ToolDefinition"
+          },
+          "environmentVariables": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Environment variables for the tool server"
+          },
+          "replicaCount": {
+            "type": "integer",
+            "default": 1,
+            "description": "Number of replicas for the tool server"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of the tool"
+          },
+          "useWorkloadIdentity": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether to use Azure Workload Identity for authentication"
+          }
+        }
+      },
+      "ToolResource": {
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ToolData"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Unique identifier for the tool resource"
+              },
+              "createdBy": {
+                "type": "string",
+                "description": "User who created the tool"
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Timestamp when the tool was created"
+              },
+              "lastUpdatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Timestamp when the tool was last updated"
+              }
+            }
+          }
+        ]
+      },
+      "ToolDefinition": {
+        "type": "object",
+        "required": ["tool"],
+        "properties": {
+          "tool": {
+            "$ref": "#/components/schemas/McpTool"
+          },
+          "port": {
+            "type": "integer",
+            "default": 8000,
+            "description": "Port for the tool server endpoint"
+          }
+        }
+      },
+      "McpTool": {
+        "type": "object",
+        "required": ["name", "inputSchema"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The unique name of the MCP tool"
+          },
+          "title": {
+            "type": "string",
+            "description": "Human-readable title of the tool"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of what the tool does"
+          },
+          "type": {
+            "type": "string",
+            "description": "The type of tool execution",
+            "enum": ["http", "function"],
+            "default": "http"
+          },
+          "properties": {
+            "type": "object",
+            "description": "Tool-specific properties like HTTP method and path",
+            "properties": {
+              "method": {
+                "type": "string",
+                "description": "HTTP method for the tool execution",
+                "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"]
+              },
+              "path": {
+                "type": "string",
+                "description": "Path for the tool execution endpoint"
+              }
+            }
+          },
+          "inputSchema": {
+            "type": "object",
+            "description": "JSON Schema defining the tool's input parameters",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["object"]
+              },
+              "properties": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "required": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "annotations": {
+            "type": "object",
+            "description": "Additional metadata annotations for the tool",
+            "properties": {
+              "readOnly": {
+                "type": "boolean",
+                "description": "Indicates if the tool is read-only"
+              }
+            },
+            "additionalProperties": true
           }
         }
       }

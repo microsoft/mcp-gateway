@@ -9,7 +9,7 @@
 - [Architecture](#architecture)
 - [Features](#features)
 - [Getting Started – Local Deployment](#getting-started---local-deployment)
-- [Getting Started – Deploy to Azure](#getting-started---deploy-to-azure)
+- [Getting Started – 1-Click Deploy to Azure](#getting-started---deploy-to-azure)
 
 ## Overview
 
@@ -23,53 +23,104 @@ This project provides:
 
 ## Key Concepts
 
-- **MCP Server**: A server implementing the Model Context Protocol, which typically exposes SSE or streamable HTTP endpoints.
+- **MCP Server**: A server implementing the Model Context Protocol, which typically a streamable HTTP endpoint.
 - **Adapters**: Logical resources representing MCP servers in the gateway, managed under the `/adapters` scope. Designed to coexist with other resource types (e.g., `/agents`) in a unified AI development platform.
+- **Tools**: Registered resources with MCP tool definitions that can be dynamically routed via the tool gateway router. Each tool includes metadata about its execution endpoint and input schema.
+- **Tool Gateway Router**: An MCP server that acts as an intelligent router, directing tool execution requests to the appropriate registered tool servers based on tool definitions. Multiple router instances may run behind the gateway for session affinity.
 - **Session-Aware Stateful Routing**: Ensures that all requests with a given `session_id` are consistently routed to the same MCP server instance.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    subgraph Clients["Clients"]
-        DataClient["Agent/MCP Data<br>Client"]
-        MgmtClient["Server Management<br>Client"]
-    end
-
-    subgraph DataPlane["Data Plane"]
-        Routing["Distributed Routing"]
-    end
-
-    subgraph ControlPlane["Control Plane"]
-        DeploymentManagement["Deployment Management"]
-        MetadataManagement["Metadata Management"]
+    subgraph Clients[" "]
+        direction TB
+        DataClient["🔌 Agent/MCP<br>Data Client"]
+        MgmtClient["⚙️ Management<br>Client"]
     end
 
     subgraph Gateway["MCP Gateway"]
-        Auth["AuthN - Bearer<br>AuthZ - RBAC/ACL"]
-        Auth2["AuthN - Bearer<br>AuthZ - RBAC/ACL"]
-        DataPlane
-        ControlPlane
+        direction TB
+        
+        subgraph Auth1["Authentication & Authorization"]
+            Auth["🔐 Data Plane Auth<br>Bearer Token / RBAC"]
+            Auth2["🔐 Control Plane Auth<br>Bearer Token / RBAC"]
+        end
+        
+        subgraph DataPlane["Data Plane"]
+            Routing["🔀 Adapter Routing<br>/adapters/{name}/mcp"]
+            ToolRouting["🔀 Tool Router Gateway<br>/mcp"]
+        end
+
+        subgraph ControlPlane["Control Plane"]
+            direction LR
+            AdapterMgmt["📦 Adapter Management<br>/adapters CRUD"]
+            ToolMgmt["🔧 Tool Management<br>/tools CRUD"]
+        end
+        
+        subgraph Management["Backend Services"]
+            DeploymentMgmt["☸️ Deployment Manager"]
+            MetadataMgmt["📋 Metadata Manager"]
+        end
     end
 
     subgraph Cluster["Kubernetes Cluster"]
-        PodA["Server Pod<br>mcp-a-0"]
-        PodA1["Server Pod<br>mcp-a-1"]
-        PodB["Server Pod<br>mcp-b-0"]
+        direction TB
+        
+        subgraph ServerRow[" "]
+            direction LR
+            
+            subgraph MCPServers["MCP Servers"]
+                direction TB
+                PodA["mcp-a-0"]
+                PodA1["mcp-a-1"]
+                PodB["mcp-b-0"]
+            end
+            
+            subgraph ToolRouters["Tool Gateway Routers"]
+                direction TB
+                Router1["toolgateway-0"]
+                Router2["toolgateway-1"]
+            end
+        end
+        
+        subgraph ToolServers["Registered Tool Servers"]
+            direction LR
+            Tool1["tool-1-0"]
+            Tool2["tool-2-0"]
+        end
     end
 
-    DataClient -- SSE/<br>Streamable HTTP --> Auth
-    MgmtClient -- "CRUD /adapters" --> Auth2 --> ControlPlane
+    Metadata[("💾 Metadata Store<br>Server & Tool Info")]
+
+    DataClient -->|"MCP Requests"| Auth
+    MgmtClient -->|"API Calls"| Auth2
+    
     Auth --> Routing
-    Routing -- Session Affinity Routing --> PodA
-    Routing --> PodA1 & PodB
-    MetadataManagement --> Metadata[("Server<br>Metadata")]
-    DeploymentManagement -- "Deployment/Status Check"--> Cluster
+    Auth --> ToolRouting
+    Auth2 --> AdapterMgmt
+    Auth2 --> ToolMgmt
+    
+    AdapterMgmt & ToolMgmt --> DeploymentMgmt
+    AdapterMgmt & ToolMgmt --> MetadataMgmt
+    
+    Routing -.->|"Session Affinity"| MCPServers
+    ToolRouting -.->|"Session Affinity"| ToolRouters
+    ToolRouters ==>|"Dynamic Routing"| ToolServers
+    
+    DeploymentMgmt -->|"Deploy & Monitor"| Cluster
+    MetadataMgmt <-->|"Read/Write"| Metadata
+
+    style Gateway fill:#e1f5ff
+    style Cluster fill:#fff4e1
+    style Metadata fill:#f0f0f0
 ```
 
 ## Features
 
 ### Control Plane – RESTful APIs for MCP Server Management
+
+#### MCP Server Management (Adapters)
 
 - `POST /adapters` — Deploy and register a new MCP server.
 - `GET /adapters` — List all MCP servers the user can access.
@@ -79,17 +130,55 @@ flowchart LR
 - `PUT /adapters/{name}` — Update the deployment.
 - `DELETE /adapters/{name}` — Remove the server.
 
+#### Tool Registration and Management
+
+- `POST /tools` — Register and deploy a tool with MCP tool definition metadata.
+- `GET /tools` — List all registered tools the user can access.
+- `GET /tools/{name}` — Retrieve metadata and tool definition for a specific tool.
+- `GET /tools/{name}/status` — Check the tool deployment status.
+- `GET /tools/{name}/logs` — Access the tool server's running logs.
+- `PUT /tools/{name}` — Update a tool deployment and definition.
+- `DELETE /tools/{name}` — Remove a registered tool.
+
 ### Data Plane – Gateway Routing for MCP Servers
 
-- `GET /adapters/{name}/sse` — Establish an initial SSE connection.
-- `POST /adapters/{name}/messages` — Send subsequent requests using `session_id`.
+#### Direct MCP Server Access
+
 - `POST /adapters/{name}/mcp` — Establish a streamable HTTP connection.
+
+#### Dynamic Tool Routing via Tool Gateway Router
+
+- `POST /mcp` — Route requests to the tool gateway router, which dynamically routes to registered tools based on tool definitions. The router itself is an MCP server with multiple instances hosted behind the gateway for scalability.
 
 ### Additional Capabilities
 
 - Authentication and authorization support (production mode).
 - Stateless reverse proxy with a distributed session store (production mode).
 - Kubernetes-native deployment using StatefulSets and headless services.
+
+### Tool Registration and Dynamic Routing
+
+The MCP Gateway now supports **tool registration** with dynamic routing capabilities, enabling a scalable architecture for managing and executing MCP tools.
+
+### How It Works
+
+1. **Tool Registration**: Developers register tools via the `/tools` API endpoint, providing:
+   - Container image details (name and version)
+   - MCP tool definition (name, description, input schema)
+   - Execution endpoint configuration (port and path)
+   - Deployment configuration (replicas, environment variables)
+
+2. **Tool Gateway Router**: A specialized MCP server that acts as an intelligent router:
+   - Runs as multiple instances behind the gateway for high availability
+   - Maintains awareness of all registered tools and their definitions
+   - Dynamically routes tool execution requests to the appropriate tool server
+   - Accessed via `POST /mcp` endpoint (without adapter name)
+
+3. **Dynamic Routing**: When clients send MCP requests to `/mcp`:
+   - The gateway routes requests to available tool gateway router instances with session affinity
+   - The router analyzes the tool call in the request
+   - Based on the tool definition, it forwards the execution to the correct registered tool server
+   - Results are returned through the router back to the client
 
 ## Getting Started - Local Deployment
 
@@ -110,12 +199,17 @@ docker build -f mcp-example-server/Dockerfile mcp-example-server -t localhost:50
 docker push localhost:5000/mcp-example:1.0.0
 ```
 
-### 4. Build & Publish MCP Gateway
+### 4. Build & Publish MCP Gateway and Tool Gateway Router
 (Optional) Open `dotnet/Microsoft.McpGateway.sln` with Visual Studio.
 
-Publish the MCP Gateway image by right-clicking `Publish` on `Microsoft.McpGateway.Service` in Visual Studio, or run:
+Publish the MCP Gateway image:
 ```sh
 dotnet publish dotnet/Microsoft.McpGateway.Service/src/Microsoft.McpGateway.Service.csproj -c Release /p:PublishProfile=localhost_5000.pubxml
+```
+
+Publish the Tool Gateway Router image:
+```sh
+dotnet publish dotnet/Microsoft.McpGateway.Tools/src/Microsoft.McpGateway.Tools.csproj -c Release /p:PublishProfile=localhost_5000.pubxml
 ```
 
 ### 5. Deploy MCP Gateway to Kubernetes Cluster
@@ -167,9 +261,77 @@ kubectl port-forward -n adapter svc/mcpgateway-service 8000:8000
 
 - For other servers:  
   - `http://localhost:8000/adapters/{name}/mcp` (Streamable HTTP)  
-  - `http://localhost:8000/adapters/{name}/sse` (SSE)
 
-### 9. Clean the Environment  
+### 9. Test Tool Registration and Dynamic Routing
+
+#### Build & Publish a Tool Server Image
+
+First, build and push a tool server image to your local registry:
+```sh
+docker build -f sample-tool-server/Dockerfile sample-tool-server -t localhost:5000/weather-tool:1.0.0
+docker push localhost:5000/weather-tool:1.0.0
+```
+
+#### Register a Tool
+
+Send a request to register a tool with its definition:
+```http
+POST http://localhost:8000/tools
+Content-Type: application/json
+```
+```json
+{
+  "name": "weather",
+  "imageName": "weather-tool",
+  "imageVersion": "1.0.0",
+  "description": "Weather tool for getting current weather information",
+  "toolDefinition": {
+    "tool": {
+      "name": "weather",
+      "title": "Weather Information",
+      "description": "Gets the current weather for a specified location.",
+      "type": "http",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The city and state, e.g. San Francisco, CA"
+          }
+        },
+        "required": ["location"]
+      }
+    },
+    "port": 8000
+  }
+}
+```
+
+#### Verify Tool Deployment
+
+Check the tool deployment status:
+```http
+GET http://localhost:8000/tools/weather/status
+```
+
+#### Test Tool Routing via Tool Gateway Router
+
+Use an MCP client (like VS Code) to connect to the tool gateway router:
+
+Sample `.vscode/mcp.json` that connects to the tool gateway router:
+```json
+{
+  "servers": {
+    "tool-gateway": {
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
+The router will automatically route tool calls to the appropriate registered tool servers based on the tool name in the MCP request.
+
+### 10. Clean the Environment  
    To remove all deployed resources, delete the Kubernetes namespace:
    ```sh
    kubectl delete namespace adapter
@@ -310,15 +472,94 @@ az acr build -r "mgreg$resourceLabel" -f mcp-example-server/Dockerfile mcp-examp
 
 - For other servers:  
   - `http://<resourceLabel>.<location>.cloudapp.azure.com/adapters/{name}/mcp` (Streamable HTTP)  
-  - `http://<resourceLabel>.<location>.cloudapp.azure.com/adapters/{name}/sse` (SSE)
 
-### 7. Clean the Environment
+### 7. Test Tool Registration and Dynamic Routing
+
+#### Build & Publish a Tool Server Image
+
+Build and push a tool server image to ACR:
+```sh
+az acr build -r "mgreg$resourceLabel" -f sample-tool-server/Dockerfile sample-tool-server -t "mgreg$resourceLabel.azurecr.io/weather-tool:1.0.0"
+```
+
+#### Register a Tool
+
+Acquire a bearer token:
+```sh
+az account get-access-token --resource $clientId
+```
+
+Send a request to register a tool with its definition:
+```http
+POST http://<resourceLabel>.<location>.cloudapp.azure.com/tools
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+```json
+{
+  "name": "weather",
+  "imageName": "weather-tool",
+  "imageVersion": "1.0.0",
+  "useWorkloadIdentity": true,
+  "description": "Weather tool for getting current weather information",
+  "toolDefinition": {
+    "tool": {
+      "name": "weather",
+      "title": "Weather Information",
+      "description": "Gets the current weather for a specified location.",
+      "type": "http",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The city and state, e.g. San Francisco, CA"
+          }
+        },
+        "required": ["location"]
+      },
+      "annotations": {
+        "readOnly": true
+      }
+    },
+    "port": 8000
+  }
+}
+```
+
+#### Verify Tool Deployment
+
+Check the tool deployment status:
+```http
+GET http://<resourceLabel>.<location>.cloudapp.azure.com/tools/weather/status
+Authorization: Bearer <token>
+```
+
+#### Test Tool Routing via Tool Gateway Router
+
+Use an MCP client (like VS Code) to connect to the tool gateway router:
+
+Sample `.vscode/mcp.json` that connects to the tool gateway router:
+```json
+{
+  "servers": {
+    "tool-gateway": {
+      "url": "http://<resourceLabel>.<location>.cloudapp.azure.com/mcp"
+    }
+  }
+}
+```
+> **Note:** Authentication is required. VS Code will handle the authentication process.
+
+The router will automatically route tool calls to the appropriate registered tool servers based on the tool name in the MCP request.
+
+### 8. Clean the Environment
 To remove all deployed resources, delete the resource group from Azure portal or run:
 ```sh
 az group delete --name <resourceGroupName> --yes
 ```
 
-### 8. Production Onboarding
+### 9. Production Onboarding
 
 - **TLS Configuration**  
   Set up HTTPS on Azure Application Gateway (AAG) listener using valid TLS certificates.
