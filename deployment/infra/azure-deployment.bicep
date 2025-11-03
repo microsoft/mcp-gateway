@@ -10,17 +10,45 @@ param resourceLabel string = resourceGroup().name
 @description('The Azure region for resource deployment. Defaults to the resource group location.')
 param location string = resourceGroup().location
 
-var aksName = 'mg-aks-${resourceLabel}'
-var acrName = 'mgreg${resourceLabel}'
-var cosmosDbAccountName = 'mg-storage-${resourceLabel}'
-var userAssignedIdentityName = 'mg-identity-${resourceLabel}'
-var appInsightsName = 'mg-ai-${resourceLabel}'
-var vnetName = 'mg-vnet-${resourceLabel}'
-var aksSubnetName = 'mg-aks-subnet-${resourceLabel}'
-var appGwSubnetName = 'mg-aag-subnet-${resourceLabel}'
-var appGwName = 'mg-aag-${resourceLabel}'
-var publicIpName = 'mg-pip-${resourceLabel}'
-var federatedCredName = 'mg-sa-federation-${resourceLabel}'
+var resourceLabelLower = toLower(resourceLabel)
+
+var aksNameBase = 'mg-aks-${resourceLabelLower}'
+var aksName = substring(aksNameBase, 0, min(length(aksNameBase), 63))
+
+var acrNameBase = 'mgreg${resourceLabelLower}'
+var acrName = substring(acrNameBase, 0, min(length(acrNameBase), 50))
+
+var cosmosDbAccountNameBase = 'mg-storage-${resourceLabelLower}'
+var cosmosDbAccountName = substring(cosmosDbAccountNameBase, 0, min(length(cosmosDbAccountNameBase), 44))
+
+var userAssignedIdentityNameBase = 'mg-identity-${resourceLabelLower}'
+var userAssignedIdentityName = substring(userAssignedIdentityNameBase, 0, min(length(userAssignedIdentityNameBase), 128))
+
+var appInsightsNameBase = 'mg-ai-${resourceLabelLower}'
+var appInsightsName = substring(appInsightsNameBase, 0, min(length(appInsightsNameBase), 260))
+
+var vnetNameBase = 'mg-vnet-${resourceLabelLower}'
+var vnetName = substring(vnetNameBase, 0, min(length(vnetNameBase), 64))
+
+var aksSubnetNameBase = 'mg-aks-subnet-${resourceLabelLower}'
+var aksSubnetName = substring(aksSubnetNameBase, 0, min(length(aksSubnetNameBase), 80))
+
+var appGwSubnetNameBase = 'mg-aag-subnet-${resourceLabelLower}'
+var appGwSubnetName = substring(appGwSubnetNameBase, 0, min(length(appGwSubnetNameBase), 80))
+
+var appGwNameBase = 'mg-aag-${resourceLabelLower}'
+var appGwName = substring(appGwNameBase, 0, min(length(appGwNameBase), 80))
+
+var publicIpNameBase = 'mg-pip-${resourceLabelLower}'
+var publicIpName = substring(publicIpNameBase, 0, min(length(publicIpNameBase), 80))
+
+var publicIpDnsLabel = substring(resourceLabelLower, 0, min(length(resourceLabelLower), 63))
+
+var federatedCredNameBase = 'mg-sa-federation-${resourceLabelLower}'
+var federatedCredName = substring(federatedCredNameBase, 0, min(length(federatedCredNameBase), 128))
+
+var federatedCredWorkloadNameBase = '${federatedCredName}-workload'
+var federatedCredWorkloadName = substring(federatedCredWorkloadNameBase, 0, min(length(federatedCredWorkloadNameBase), 128))
 
 // VNet
 resource vnet 'Microsoft.Network/virtualNetworks@2022-07-01' = {
@@ -148,7 +176,7 @@ resource appGwPublicIp 'Microsoft.Network/publicIPAddresses@2022-05-01' = {
   properties: {
     publicIPAllocationMethod: 'Static'
     dnsSettings: {
-      domainNameLabel: resourceLabel
+      domainNameLabel: publicIpDnsLabel
     }
   }
 }
@@ -328,7 +356,7 @@ resource federatedCred 'Microsoft.ManagedIdentity/userAssignedIdentities/federat
 // Federated Credential
 resource federatedCredWorkload 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
   parent: uaiWorkload
-  name: '${federatedCredName}-workload'
+  name: federatedCredWorkloadName
   properties: {
     audiences: [
       'api://AzureADTokenExchange'
