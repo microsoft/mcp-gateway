@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.36.1.42791",
-      "templateHash": "7651876796214077404"
+      "version": "0.38.33.27573",
+      "templateHash": "2243900866350713366"
     }
   },
   "parameters": {
@@ -33,17 +33,32 @@
     }
   },
   "variables": {
-    "aksName": "[format('mg-aks-{0}', parameters('resourceLabel'))]",
-    "acrName": "[format('mgreg{0}', parameters('resourceLabel'))]",
-    "cosmosDbAccountName": "[format('mg-storage-{0}', parameters('resourceLabel'))]",
-    "userAssignedIdentityName": "[format('mg-identity-{0}', parameters('resourceLabel'))]",
-    "appInsightsName": "[format('mg-ai-{0}', parameters('resourceLabel'))]",
-    "vnetName": "[format('mg-vnet-{0}', parameters('resourceLabel'))]",
-    "aksSubnetName": "[format('mg-aks-subnet-{0}', parameters('resourceLabel'))]",
-    "appGwSubnetName": "[format('mg-aag-subnet-{0}', parameters('resourceLabel'))]",
-    "appGwName": "[format('mg-aag-{0}', parameters('resourceLabel'))]",
-    "publicIpName": "[format('mg-pip-{0}', parameters('resourceLabel'))]",
-    "federatedCredName": "[format('mg-sa-federation-{0}', parameters('resourceLabel'))]"
+    "resourceLabelLower": "[toLower(parameters('resourceLabel'))]",
+    "aksNameBase": "[format('mg-aks-{0}', variables('resourceLabelLower'))]",
+    "aksName": "[substring(variables('aksNameBase'), 0, min(length(variables('aksNameBase')), 63))]",
+    "acrNameBase": "[format('mgreg{0}', variables('resourceLabelLower'))]",
+    "acrName": "[substring(variables('acrNameBase'), 0, min(length(variables('acrNameBase')), 50))]",
+    "cosmosDbAccountNameBase": "[format('mg-storage-{0}', variables('resourceLabelLower'))]",
+    "cosmosDbAccountName": "[substring(variables('cosmosDbAccountNameBase'), 0, min(length(variables('cosmosDbAccountNameBase')), 44))]",
+    "userAssignedIdentityNameBase": "[format('mg-identity-{0}', variables('resourceLabelLower'))]",
+    "userAssignedIdentityName": "[substring(variables('userAssignedIdentityNameBase'), 0, min(length(variables('userAssignedIdentityNameBase')), 128))]",
+    "appInsightsNameBase": "[format('mg-ai-{0}', variables('resourceLabelLower'))]",
+    "appInsightsName": "[substring(variables('appInsightsNameBase'), 0, min(length(variables('appInsightsNameBase')), 260))]",
+    "vnetNameBase": "[format('mg-vnet-{0}', variables('resourceLabelLower'))]",
+    "vnetName": "[substring(variables('vnetNameBase'), 0, min(length(variables('vnetNameBase')), 64))]",
+    "aksSubnetNameBase": "[format('mg-aks-subnet-{0}', variables('resourceLabelLower'))]",
+    "aksSubnetName": "[substring(variables('aksSubnetNameBase'), 0, min(length(variables('aksSubnetNameBase')), 80))]",
+    "appGwSubnetNameBase": "[format('mg-aag-subnet-{0}', variables('resourceLabelLower'))]",
+    "appGwSubnetName": "[substring(variables('appGwSubnetNameBase'), 0, min(length(variables('appGwSubnetNameBase')), 80))]",
+    "appGwNameBase": "[format('mg-aag-{0}', variables('resourceLabelLower'))]",
+    "appGwName": "[substring(variables('appGwNameBase'), 0, min(length(variables('appGwNameBase')), 80))]",
+    "publicIpNameBase": "[format('mg-pip-{0}', variables('resourceLabelLower'))]",
+    "publicIpName": "[substring(variables('publicIpNameBase'), 0, min(length(variables('publicIpNameBase')), 80))]",
+    "publicIpDnsLabel": "[substring(variables('resourceLabelLower'), 0, min(length(variables('resourceLabelLower')), 63))]",
+    "federatedCredNameBase": "[format('mg-sa-federation-{0}', variables('resourceLabelLower'))]",
+    "federatedCredName": "[substring(variables('federatedCredNameBase'), 0, min(length(variables('federatedCredNameBase')), 128))]",
+    "federatedCredWorkloadNameBase": "[format('{0}-workload', variables('federatedCredName'))]",
+    "federatedCredWorkloadName": "[substring(variables('federatedCredWorkloadNameBase'), 0, min(length(variables('federatedCredWorkloadNameBase')), 128))]"
   },
   "resources": [
     {
@@ -184,7 +199,7 @@
       "properties": {
         "publicIPAllocationMethod": "Static",
         "dnsSettings": {
-          "domainNameLabel": "[parameters('resourceLabel')]"
+          "domainNameLabel": "[variables('publicIpDnsLabel')]"
         }
       }
     },
@@ -378,7 +393,7 @@
     {
       "type": "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials",
       "apiVersion": "2023-01-31",
-      "name": "[format('{0}/{1}', format('{0}-workload', variables('userAssignedIdentityName')), format('{0}-workload', variables('federatedCredName')))]",
+      "name": "[format('{0}/{1}', format('{0}-workload', variables('userAssignedIdentityName')), variables('federatedCredWorkloadName'))]",
       "properties": {
         "audiences": [
           "api://AzureADTokenExchange"
