@@ -30,7 +30,7 @@ namespace Microsoft.McpGateway.Management.Contracts
         public DateTimeOffset LastUpdatedAt { get; set; }
 
         public AdapterResource(AdapterData adapterData, string createdBy, DateTimeOffset createdAt, DateTimeOffset lastUpdatedAt)
-            : base(adapterData.Name, adapterData.ImageName, adapterData.ImageVersion, adapterData.EnvironmentVariables, adapterData.ReplicaCount, adapterData.Description, adapterData.Protocol, adapterData.ConnectionType, adapterData.UseWorkloadIdentity)
+            : base(adapterData.Name, adapterData.ImageName, adapterData.ImageVersion, adapterData.EnvironmentVariables, adapterData.ReplicaCount, adapterData.Description, adapterData.UseWorkloadIdentity)
         {
             CreatedBy = createdBy;
             CreatedAt = createdAt;
@@ -47,8 +47,6 @@ namespace Microsoft.McpGateway.Management.Contracts
                 EnvironmentVariables = data.EnvironmentVariables,
                 ReplicaCount = data.ReplicaCount,
                 Description = data.Description,
-                Protocol = data.Protocol,
-                ConnectionType = data.ConnectionType,
                 CreatedBy = createdBy,
                 CreatedAt = createdAt,
                 LastUpdatedAt = DateTime.UtcNow,

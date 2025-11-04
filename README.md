@@ -9,7 +9,7 @@
 - [Architecture](#architecture)
 - [Features](#features)
 - [Getting Started – Local Deployment](#getting-started---local-deployment)
-- [Getting Started – Deploy to Azure](#getting-started---deploy-to-azure)
+- [Getting Started – 1-Click Deploy to Azure](#getting-started---deploy-to-azure)
 
 ## Overview
 
@@ -23,7 +23,7 @@ This project provides:
 
 ## Key Concepts
 
-- **MCP Server**: A server implementing the Model Context Protocol, which typically exposes SSE or streamable HTTP endpoints.
+- **MCP Server**: A server implementing the Model Context Protocol, which typically a streamable HTTP endpoint.
 - **Adapters**: Logical resources representing MCP servers in the gateway, managed under the `/adapters` scope. Designed to coexist with other resource types (e.g., `/agents`) in a unified AI development platform.
 - **Session-Aware Stateful Routing**: Ensures that all requests with a given `session_id` are consistently routed to the same MCP server instance.
 
@@ -81,8 +81,6 @@ flowchart LR
 
 ### Data Plane – Gateway Routing for MCP Servers
 
-- `GET /adapters/{name}/sse` — Establish an initial SSE connection.
-- `POST /adapters/{name}/messages` — Send subsequent requests using `session_id`.
 - `POST /adapters/{name}/mcp` — Establish a streamable HTTP connection.
 
 ### Additional Capabilities
@@ -167,7 +165,6 @@ kubectl port-forward -n adapter svc/mcpgateway-service 8000:8000
 
 - For other servers:  
   - `http://localhost:8000/adapters/{name}/mcp` (Streamable HTTP)  
-  - `http://localhost:8000/adapters/{name}/sse` (SSE)
 
 ### 9. Clean the Environment  
    To remove all deployed resources, delete the Kubernetes namespace:
