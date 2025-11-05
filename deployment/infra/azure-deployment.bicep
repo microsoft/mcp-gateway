@@ -427,6 +427,20 @@ resource cacheContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
   }
 }
 
+resource toolContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2023-04-15' = {
+  name: 'ToolContainer'
+  parent: cosmosDbSqlDb
+  properties: {
+    resource: {
+      id: 'ToolContainer'
+      partitionKey: {
+        paths: ['/id']
+        kind: 'Hash'
+      }
+    }
+  }
+}
+
 // Cosmos DB Data Contributor Role Assignment to UAI
 resource cosmosDbRoleAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2022-11-15' = {
   parent: cosmosDb

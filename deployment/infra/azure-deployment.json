@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.38.33.27573",
-      "templateHash": "2243900866350713366"
+      "templateHash": "12874722858654947563"
     }
   },
   "parameters": {
@@ -466,6 +466,25 @@
       "properties": {
         "resource": {
           "id": "CacheContainer",
+          "partitionKey": {
+            "paths": [
+              "/id"
+            ],
+            "kind": "Hash"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', variables('cosmosDbAccountName'), 'McpGatewayDb')]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2023-04-15",
+      "name": "[format('{0}/{1}/{2}', variables('cosmosDbAccountName'), 'McpGatewayDb', 'ToolContainer')]",
+      "properties": {
+        "resource": {
+          "id": "ToolContainer",
           "partitionKey": {
             "paths": [
               "/id"
