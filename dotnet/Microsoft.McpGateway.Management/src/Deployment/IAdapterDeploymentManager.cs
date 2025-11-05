@@ -14,8 +14,9 @@ namespace Microsoft.McpGateway.Management.Deployment
         /// Creates a new deployment asynchronously.
         /// </summary>
         /// <param name="request">The data for the adapter deployment.</param>
+        /// <param name="resourceType">The type of resource being deployed (Adapter or Tool).</param>
         /// <param name="cancellationToken">Token to cancel the operation.</param>
-        Task CreateDeploymentAsync(AdapterData request, CancellationToken cancellationToken);
+        Task CreateDeploymentAsync(AdapterData request, ResourceType resourceType, CancellationToken cancellationToken);
 
         /// <summary>
         /// Deletes an existing deployment asynchronously.
@@ -36,6 +37,7 @@ namespace Microsoft.McpGateway.Management.Deployment
         /// Get the deployed adapter deployment logs.
         /// </summary>
         /// <param name="name">The name of the adapter deployment</param>
+        /// <param name="ordinal">The ordinal index of the pod instance.</param>
         /// <param name="cancellationToken">Token to cancel the operation.</param>
         /// <returns>The logs from the deployment pod.</returns>
         Task<string> GetDeploymentLogsAsync(string name, int ordinal, CancellationToken cancellationToken);
@@ -44,7 +46,8 @@ namespace Microsoft.McpGateway.Management.Deployment
         /// Updates an existing deployment asynchronously.
         /// </summary>
         /// <param name="request">The data for the adapter deployment update.</param>
+        /// <param name="resourceType">The type of resource being deployed (Adapter or Tool).</param>
         /// <param name="cancellationToken">Token to cancel the operation.</param>
-        Task UpdateDeploymentAsync(AdapterData request, CancellationToken cancellationToken);
+        Task UpdateDeploymentAsync(AdapterData request, ResourceType resourceType, CancellationToken cancellationToken);
     }
 }

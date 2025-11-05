@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using System.Security.Claims;
 using Azure.Identity;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Azure.Cosmos;
@@ -13,6 +12,9 @@ using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Service.Routing;
 using Microsoft.McpGateway.Service.Session;
 using ModelContextProtocol.AspNetCore.Authentication;
+using System.Security.Claims;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 var credential = new DefaultAzureCredential();
@@ -27,8 +29,18 @@ builder.Services.AddSingleton<ISessionRoutingHandler, AdapterSessionRoutingHandl
 
 if (builder.Environment.IsDevelopment())
 {
-    builder.Services.AddSingleton<IAdapterResourceStore, InMemoryAdapterResourceStore>();
-    builder.Services.AddDistributedMemoryCache();
+    var redisConnection = builder.Configuration.GetValue<string>("Redis:ConnectionString") ?? "localhost:6379";
+    builder.Services.AddStackExchangeRedisCache(options =>
+    {
+        options.Configuration = redisConnection;
+        options.InstanceName = "mcpgateway:";
+    });
+    
+    builder.Services.AddSingleton<IAdapterResourceStore, RedisAdapterResourceStore>();
+    builder.Services.AddSingleton<IToolResourceStore, RedisToolResourceStore>();
+    
+    builder.Logging.AddConsole();
+    builder.Logging.SetMinimumLevel(LogLevel.Debug);
 }
 else
 {
@@ -52,24 +64,37 @@ else
     })
     .AddMicrosoftIdentityWebApi(azureAdConfig);
 
-    builder.Services.AddSingleton<IAdapterResourceStore>(c =>
+    // Create CosmosClient with credential-based authentication
+    var cosmosConfig = builder.Configuration.GetSection("CosmosSettings");
+    var cosmosClient = new CosmosClient(
+        cosmosConfig["AccountEndpoint"], 
+        credential, 
+        new CosmosClientOptions
+        {
+            Serializer = new CosmosSystemTextJsonSerializer(new JsonSerializerOptions
+            {
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+            })
+        });
+
+    builder.Services.AddSingleton<IAdapterResourceStore>(sp =>
     {
-        var config = builder.Configuration.GetSection("CosmosSettings");
-        var connectionString = config["ConnectionString"];
-        var client = string.IsNullOrEmpty(connectionString) ? new CosmosClient(config["AccountEndpoint"], credential) : new CosmosClient(connectionString);
-        return new CosmosAdapterResourceStore(client, config["DatabaseName"]!, "AdapterContainer", c.GetRequiredService<ILogger<CosmosAdapterResourceStore>>());
+        var logger = sp.GetRequiredService<ILogger<CosmosAdapterResourceStore>>();
+        return new CosmosAdapterResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "AdapterContainer", logger);
     });
+
+    builder.Services.AddSingleton<IToolResourceStore>(sp =>
+    {
+        var logger = sp.GetRequiredService<ILogger<CosmosToolResourceStore>>();
+        return new CosmosToolResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "ToolContainer", logger);
+    });
+    
     builder.Services.AddCosmosCache(options =>
     {
-        var config = builder.Configuration.GetSection("CosmosSettings");
-        var endpoint = config["AccountEndpoint"];
-        var connectionString = config["ConnectionString"];
-
         options.ContainerName = "CacheContainer";
-        options.DatabaseName = config["DatabaseName"]!;
+        options.DatabaseName = cosmosConfig["DatabaseName"]!;
         options.CreateIfNotExists = true;
-
-        options.ClientBuilder = string.IsNullOrEmpty(connectionString) ? new CosmosClientBuilder(endpoint, credential) : new CosmosClientBuilder(connectionString);
+        options.ClientBuilder = new CosmosClientBuilder(cosmosConfig["AccountEndpoint"], credential);
     });
 }
 
@@ -84,6 +109,7 @@ builder.Services.AddSingleton<IAdapterDeploymentManager>(c =>
     return new KubernetesAdapterDeploymentManager(config["Endpoint"]!, c.GetRequiredService<IKubeClientWrapper>(), c.GetRequiredService<ILogger<KubernetesAdapterDeploymentManager>>());
 });
 builder.Services.AddSingleton<IAdapterManagementService, AdapterManagementService>();
+builder.Services.AddSingleton<IToolManagementService, ToolManagementService>();
 builder.Services.AddSingleton<IAdapterRichResultProvider, AdapterRichResultProvider>();
 
 builder.Services.AddAuthorization();
@@ -112,4 +138,4 @@ if (app.Environment.IsDevelopment())
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
-app.Run();
+await app.RunAsync();

@@ -11,12 +11,6 @@ namespace Microsoft.McpGateway.Management.Store
     public interface IAdapterResourceStore
     {
         /// <summary>
-        /// Initializes the underlying storage, e.g., creates required containers or databases.
-        /// </summary>
-        /// <param name="cancellationToken">Token to cancel the initialization operation.</param>
-        Task InitializeAsync(CancellationToken cancellationToken);
-
-        /// <summary>
         /// Attempts to retrieve an adapter resource by name.
         /// </summary>
         /// <param name="name">The name of the adapter resource.</param>

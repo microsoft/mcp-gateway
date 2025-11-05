@@ -10,12 +10,6 @@ namespace Microsoft.McpGateway.Management.Store
     {
         private readonly ConcurrentDictionary<string, AdapterResource> _store = new();
 
-        public Task InitializeAsync(CancellationToken cancellationToken)
-        {
-            // No-op for in-memory store
-            return Task.CompletedTask;
-        }
-
         public Task<AdapterResource?> TryGetAsync(string name, CancellationToken cancellationToken)
         {
             _store.TryGetValue(name, out var resource);
