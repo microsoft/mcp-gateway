@@ -47,6 +47,12 @@ metadata:
   name: mcpgateway-sa
   namespace: adapter
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: workload-sa
+  namespace: adapter
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -76,6 +82,47 @@ roleRef:
   kind: Role
   name: app-manager
   apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: toolgateway
+  namespace: adapter
+spec:
+  serviceName: toolgateway-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: toolgateway
+  template:
+    metadata:
+      labels:
+        app: toolgateway
+        adapter/type: "mcp"
+    spec:
+      serviceAccountName: mcpgateway-sa
+      containers:
+        - name: toolgateway-container
+          image: localhost:5000/microsoft-mcpgateway-tools:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: "Development"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: toolgateway-service
+  namespace: adapter
+spec:
+  clusterIP: "None"
+  selector:
+    app: toolgateway
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
 ---
 apiVersion: v1
 kind: Service

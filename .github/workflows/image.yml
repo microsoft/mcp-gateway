@@ -34,5 +34,8 @@ jobs:
     - name: Restore dependencies
       run: dotnet restore dotnet/Microsoft.McpGateway.sln --runtime linux-x64
 
-    - name: Publish and push the container image
-      run: dotnet publish dotnet/Microsoft.McpGateway.Service/src/Microsoft.McpGateway.Service.csproj --configuration Release --no-restore /p:PublishProfile=github.pubxml /p:ContainerRepository=${{ github.repository }}
+    - name: Publish and push the mcp-gateway container image
+      run: dotnet publish dotnet/Microsoft.McpGateway.Service/src/Microsoft.McpGateway.Service.csproj --configuration Release --no-restore /p:PublishProfile=github.pubxml /p:ContainerRepository=${{ github.repository_owner }}/mcp-gateway
+
+    - name: Publish and push the tool-gateway container image
+      run: dotnet publish dotnet/Microsoft.McpGateway.Tools/src/Microsoft.McpGateway.Tools.csproj --configuration Release --no-restore /p:PublishProfile=github.pubxml /p:ContainerRepository=${{ github.repository_owner }}/tool-gateway
