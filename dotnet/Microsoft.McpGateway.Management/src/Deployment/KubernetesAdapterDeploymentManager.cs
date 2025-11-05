@@ -27,11 +27,11 @@ namespace Microsoft.McpGateway.Management.Deployment
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public async Task CreateDeploymentAsync(AdapterData request, CancellationToken cancellationToken)
+        public async Task CreateDeploymentAsync(AdapterData request, ResourceType resourceType, CancellationToken cancellationToken)
         {
             var labels = new Dictionary<string, string>
             {
-                { $"{AdapterNamespace}/type", "mcp" },
+                { $"{AdapterNamespace}/type", resourceType.ToString().ToLowerInvariant() },
                 { $"{AdapterNamespace}/name", request.Name },
                 { "azure.workload.identity/use", request.UseWorkloadIdentity.ToString().ToLowerInvariant() }
             };
@@ -97,6 +97,8 @@ namespace Microsoft.McpGateway.Management.Deployment
                 }
             };
 
+            // For tools: use ClusterIP (default, stateless routing)
+            // For adapters: use headless service (ClusterIP = None, stateful routing)
             var service = new V1Service
             {
                 Metadata = new V1ObjectMeta
@@ -105,7 +107,7 @@ namespace Microsoft.McpGateway.Management.Deployment
                 },
                 Spec = new V1ServiceSpec
                 {
-                    ClusterIP = "None",
+                    ClusterIP = resourceType == ResourceType.Tool ? null : "None",
                     Selector = labels,
                     Ports =
                     [
@@ -119,7 +121,7 @@ namespace Microsoft.McpGateway.Management.Deployment
                 }
             };
 
-            _logger.LogInformation("Creating deployment for {name}.", request.Name.Sanitize());
+            _logger.LogInformation("Creating deployment for {name} with resource type {resourceType}.", request.Name.Sanitize(), resourceType.ToString().ToLowerInvariant());
             try
             {
                 await _kubeClient.UpsertStatefulSetAsync(statefulSet, AdapterNamespace, cancellationToken).ConfigureAwait(false);
@@ -133,7 +135,7 @@ namespace Microsoft.McpGateway.Management.Deployment
             try
             {
                 await _kubeClient.UpsertServiceAsync(service, AdapterNamespace, cancellationToken).ConfigureAwait(false);
-                _logger.LogInformation("Submitted Kubernetes service for {name}.", request.Name.Sanitize());
+                _logger.LogInformation("Submitted Kubernetes service for {name} with {serviceType} routing.", request.Name.Sanitize(), resourceType == ResourceType.Tool ? "stateless (ClusterIP)" : "stateful (headless)");
             }
             catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.Conflict)
             {
@@ -141,9 +143,10 @@ namespace Microsoft.McpGateway.Management.Deployment
             }
         }
 
-        public async Task UpdateDeploymentAsync(AdapterData request, CancellationToken cancellationToken)
+        public async Task UpdateDeploymentAsync(AdapterData request, ResourceType resourceType, CancellationToken cancellationToken)
         {
             var statefulSet = await _kubeClient.ReadStatefulSetAsync(request.Name, AdapterNamespace, cancellationToken).ConfigureAwait(false);
+            
             var patch = new
             {
                 spec = new
@@ -151,6 +154,15 @@ namespace Microsoft.McpGateway.Management.Deployment
                     replicas = request.ReplicaCount,
                     template = new
                     {
+                        metadata = new
+                        {
+                            labels = new Dictionary<string, string>
+                            {
+                                { $"{AdapterNamespace}/type", resourceType.ToString().ToLowerInvariant() },
+                                { $"{AdapterNamespace}/name", request.Name },
+                                { "azure.workload.identity/use", request.UseWorkloadIdentity.ToString().ToLowerInvariant() }
+                            }
+                        },
                         spec = new
                         {
                             containers = new[]
@@ -168,7 +180,7 @@ namespace Microsoft.McpGateway.Management.Deployment
             };
 
             var patchContent = new V1Patch(JsonSerializer.Serialize(patch), V1Patch.PatchType.StrategicMergePatch);
-            _logger.LogInformation("Updating deployment for {name}.", request.Name.Sanitize());
+            _logger.LogInformation("Updating deployment for {name} with resource type {resourceType}.", request.Name.Sanitize(), resourceType.ToString().ToLowerInvariant());
             await _kubeClient.PatchStatefulSetAsync(patchContent, request.Name, AdapterNamespace, cancellationToken).ConfigureAwait(false);
             _logger.LogInformation("Submitted updating deployment for {name}.", request.Name.Sanitize());
         }

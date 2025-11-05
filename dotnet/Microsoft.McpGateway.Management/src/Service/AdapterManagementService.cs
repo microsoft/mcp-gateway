@@ -1,4 +1,4 @@
-﻿// -// Copyright (c) Microsoft Corporation.
+﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 using System.Security.Claims;
@@ -38,7 +38,7 @@ namespace Microsoft.McpGateway.Management.Service
             logger.LogInformation("Start creating /adapters/{name}.", request.Name.Sanitize());
 
             logger.LogInformation("Start kubernetes deployment for /adapters/{name}.", request.Name.Sanitize());
-            await _deploymentManager.CreateDeploymentAsync(request, cancellationToken).ConfigureAwait(false);
+            await _deploymentManager.CreateDeploymentAsync(request, ResourceType.Mcp, cancellationToken).ConfigureAwait(false);
 
             logger.LogInformation("Start update internal storage for /adapters/{name}.", request.Name.Sanitize());
             await _store.UpsertAsync(adapter, cancellationToken).ConfigureAwait(false);
@@ -81,7 +81,7 @@ namespace Microsoft.McpGateway.Management.Service
                 existing.ImageVersion != request.ImageVersion ||
                 !existing.EnvironmentVariables.OrderBy(kv => kv.Key).SequenceEqual(request.EnvironmentVariables.OrderBy(kv => kv.Key)))
             {
-                await _deploymentManager.UpdateDeploymentAsync(updated, cancellationToken).ConfigureAwait(false);
+                await _deploymentManager.UpdateDeploymentAsync(updated, ResourceType.Mcp, cancellationToken).ConfigureAwait(false);
             }
 
             await _store.UpsertAsync(updated, cancellationToken).ConfigureAwait(false);

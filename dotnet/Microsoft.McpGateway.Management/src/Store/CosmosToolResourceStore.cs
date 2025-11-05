@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 using System.Net;
@@ -10,7 +10,10 @@ using Microsoft.McpGateway.Management.Extensions;
 
 namespace Microsoft.McpGateway.Management.Store
 {
-    public class CosmosAdapterResourceStore : IAdapterResourceStore
+    /// <summary>
+    /// Cosmos DB implementation of the tool resource store.
+    /// </summary>
+    public class CosmosToolResourceStore : IToolResourceStore
     {
         private readonly Container _container;
         private readonly ILogger _logger;
@@ -18,7 +21,7 @@ namespace Microsoft.McpGateway.Management.Store
         private readonly string _databaseId;
         private readonly string _containerId;
 
-        public CosmosAdapterResourceStore(CosmosClient client, string databaseId, string containerId, ILogger logger)
+        public CosmosToolResourceStore(CosmosClient client, string databaseId, string containerId, ILogger logger)
         {
             ArgumentNullException.ThrowIfNull(client);
             ArgumentNullException.ThrowIfNull(logger);
@@ -32,11 +35,22 @@ namespace Microsoft.McpGateway.Management.Store
             _logger = logger;
         }
 
-        public async Task<AdapterResource?> TryGetAsync(string name, CancellationToken cancellationToken)
+        public async Task InitializeAsync(CancellationToken cancellationToken)
+        {
+            var db = await _client.CreateDatabaseIfNotExistsAsync(_databaseId, cancellationToken: cancellationToken).ConfigureAwait(false);
+            await db.Database.CreateContainerIfNotExistsAsync(
+                new ContainerProperties
+                {
+                    Id = _containerId,
+                    PartitionKeyPath = "/id"
+                }, cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task<ToolResource?> TryGetAsync(string name, CancellationToken cancellationToken)
         {
             try
             {
-                var response = await _container.ReadItemAsync<AdapterResource>(
+                var response = await _container.ReadItemAsync<ToolResource>(
                     id: name,
                     partitionKey: new PartitionKey(name),
                     cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -45,19 +59,19 @@ namespace Microsoft.McpGateway.Management.Store
             }
             catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
             {
-                _logger.LogInformation("Cannot find /adapters/{name}, returning NULL", name.Sanitize());
+                _logger.LogInformation("Cannot find /tools/{name}, returning NULL", name.Sanitize());
                 return null;
             }
         }
 
-        public async Task UpsertAsync(AdapterResource adapter, CancellationToken cancellationToken)
+        public async Task UpsertAsync(ToolResource tool, CancellationToken cancellationToken)
         {
             using var stream = new MemoryStream();
-            await JsonSerializer.SerializeAsync(stream, adapter, cancellationToken: cancellationToken).ConfigureAwait(false);
+            await JsonSerializer.SerializeAsync(stream, tool, cancellationToken: cancellationToken).ConfigureAwait(false);
             stream.Position = 0;
             var response = await _container.UpsertItemStreamAsync(
                 stream,
-                partitionKey: new PartitionKey(adapter.Id),
+                partitionKey: new PartitionKey(tool.Id),
                 cancellationToken: cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
         }
@@ -66,21 +80,21 @@ namespace Microsoft.McpGateway.Management.Store
         {
             try
             {
-                await _container.DeleteItemAsync<AdapterResource>(
+                await _container.DeleteItemAsync<ToolResource>(
                     id: name,
                     partitionKey: new PartitionKey(name),
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
             {
-                _logger.LogWarning("Cannot find /adapters/{name} for deleting, skip the following tasks", name.Sanitize());
+                _logger.LogWarning("Cannot find /tools/{name} for deleting, skip the following tasks", name.Sanitize());
             }
         }
 
-        public async Task<IEnumerable<AdapterResource>> ListAsync(CancellationToken cancellationToken)
+        public async Task<IEnumerable<ToolResource>> ListAsync(CancellationToken cancellationToken)
         {
-            var query = _container.GetItemQueryIterator<AdapterResource>();
-            var results = new List<AdapterResource>();
+            var query = _container.GetItemQueryIterator<ToolResource>();
+            var results = new List<ToolResource>();
 
             while (query.HasMoreResults)
             {
