@@ -111,10 +111,54 @@ data:
 
   CosmosSettings__AccountEndpoint: "https://mg-storage-${IDENTIFIER}.documents.azure.com:443/"
   CosmosSettings__DatabaseName: "McpGatewayDb"
-  CosmosSettings__ConnectionString: ""
 
   ApplicationInsights__ConnectionString: "${APPINSIGHTS_CONNECTION_STRING}"
 
   ContainerRegistrySettings__Endpoint: "mgreg${IDENTIFIER}.azurecr.io"
 
   PublicOrigin: "http://${IDENTIFIER}.${REGION}.cloudapp.azure.com/"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: toolgateway
+  namespace: adapter
+spec:
+  serviceName: toolgateway-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: toolgateway
+  template:
+    metadata:
+      labels:
+        app: toolgateway
+        azure.workload.identity/use: "true"
+        adapter/type: "mcp"
+    spec:
+      serviceAccountName: mcpgateway-sa
+      containers:
+        - name: toolgateway-container
+          image: ghcr.io/microsoft/tool-gateway:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: "Production"
+          envFrom:
+            - configMapRef:
+                name: app-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: toolgateway-service
+  namespace: adapter
+spec:
+  clusterIP: "None"
+  selector:
+    app: toolgateway
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000

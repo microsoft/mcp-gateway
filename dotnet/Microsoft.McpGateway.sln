@@ -11,6 +11,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Microsoft.McpGateway.Servic
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Microsoft.McpGateway.Service.Tests", "Microsoft.McpGateway.Service\test\Microsoft.McpGateway.Service.Tests.csproj", "{B4F1001F-DB13-3433-BA1E-80C8AF0801C9}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Microsoft.McpGateway.Tools", "Microsoft.McpGateway.Tools\src\Microsoft.McpGateway.Tools.csproj", "{79C036CB-B05E-41C5-D0DC-5409CA81786D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Microsoft.McpGateway.Tools.Tests", "Microsoft.McpGateway.Tools\test\Microsoft.McpGateway.Tools.Tests.csproj", "{1BE1814B-0CCF-874B-0509-C29FF150F495}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -33,6 +37,14 @@ Global
 		{B4F1001F-DB13-3433-BA1E-80C8AF0801C9}.Debug|x64.Build.0 = Debug|x64
 		{B4F1001F-DB13-3433-BA1E-80C8AF0801C9}.Release|x64.ActiveCfg = Release|x64
 		{B4F1001F-DB13-3433-BA1E-80C8AF0801C9}.Release|x64.Build.0 = Release|x64
+		{79C036CB-B05E-41C5-D0DC-5409CA81786D}.Debug|x64.ActiveCfg = Debug|x64
+		{79C036CB-B05E-41C5-D0DC-5409CA81786D}.Debug|x64.Build.0 = Debug|x64
+		{79C036CB-B05E-41C5-D0DC-5409CA81786D}.Release|x64.ActiveCfg = Release|x64
+		{79C036CB-B05E-41C5-D0DC-5409CA81786D}.Release|x64.Build.0 = Release|x64
+		{1BE1814B-0CCF-874B-0509-C29FF150F495}.Debug|x64.ActiveCfg = Debug|x64
+		{1BE1814B-0CCF-874B-0509-C29FF150F495}.Debug|x64.Build.0 = Debug|x64
+		{1BE1814B-0CCF-874B-0509-C29FF150F495}.Release|x64.ActiveCfg = Release|x64
+		{1BE1814B-0CCF-874B-0509-C29FF150F495}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
