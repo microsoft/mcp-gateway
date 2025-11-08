@@ -1,7 +1,6 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using System.Text;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.McpGateway.Service.Session;
@@ -9,10 +8,10 @@ using Microsoft.McpGateway.Service.Session;
 namespace Microsoft.McpGateway.Service.Controllers
 {
     [ApiController]
-    [Route("adapters")]
     [Authorize]
     public class AdapterReverseProxyController(IHttpClientFactory httpClientFactory, IAdapterSessionStore sessionStore, ISessionRoutingHandler sessionRoutingHandler) : ControllerBase
     {
+        private const string ToolGateway = "toolgateway";
         private readonly IHttpClientFactory httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         private readonly IAdapterSessionStore sessionStore = sessionStore ?? throw new ArgumentNullException(nameof(sessionStore));
         private readonly ISessionRoutingHandler sessionRoutingHandler = sessionRoutingHandler ?? throw new ArgumentNullException(nameof(sessionRoutingHandler));
@@ -20,13 +19,14 @@ namespace Microsoft.McpGateway.Service.Controllers
         /// <summary>
         /// Support for MCP streamable HTTP connection.
         /// </summary>
-        [HttpPost("{name}/mcp")]
-        public async Task ForwardStreamableHttpRequest(string name, CancellationToken cancellationToken)
+        [HttpPost("mcp")]
+        [HttpPost("adapters/{name}/mcp")]
+        public async Task ForwardStreamableHttpRequest(string? name, CancellationToken cancellationToken)
         {
             var sessionId = AdapterSessionRoutingHandler.GetSessionId(HttpContext);
             string? targetAddress;
             if (string.IsNullOrEmpty(sessionId))
-                targetAddress = await sessionRoutingHandler.GetNewSessionTargetAsync(name, HttpContext, cancellationToken).ConfigureAwait(false);
+                targetAddress = await sessionRoutingHandler.GetNewSessionTargetAsync(name ?? ToolGateway, HttpContext, cancellationToken).ConfigureAwait(false);
             else
                 targetAddress = await sessionRoutingHandler.GetExistingSessionTargetAsync(HttpContext, cancellationToken).ConfigureAwait(false);
 

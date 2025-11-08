@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.38.33.27573",
-      "templateHash": "12874722858654947563"
+      "templateHash": "5648627402420051357"
     }
   },
   "parameters": {
@@ -30,6 +30,13 @@
       "metadata": {
         "description": "The Azure region for resource deployment. Defaults to the resource group location."
       }
+    },
+    "enablePrivateEndpoints": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable private endpoints for Azure resources (ACR, Cosmos DB). When enabled, resources will only be accessible within the VNet."
+      }
     }
   },
   "variables": {
@@ -50,6 +57,8 @@
     "aksSubnetName": "[substring(variables('aksSubnetNameBase'), 0, min(length(variables('aksSubnetNameBase')), 80))]",
     "appGwSubnetNameBase": "[format('mg-aag-subnet-{0}', variables('resourceLabelLower'))]",
     "appGwSubnetName": "[substring(variables('appGwSubnetNameBase'), 0, min(length(variables('appGwSubnetNameBase')), 80))]",
+    "peSubnetNameBase": "[format('mg-pe-subnet-{0}', variables('resourceLabelLower'))]",
+    "peSubnetName": "[substring(variables('peSubnetNameBase'), 0, min(length(variables('peSubnetNameBase')), 80))]",
     "appGwNameBase": "[format('mg-aag-{0}', variables('resourceLabelLower'))]",
     "appGwName": "[substring(variables('appGwNameBase'), 0, min(length(variables('appGwNameBase')), 80))]",
     "publicIpNameBase": "[format('mg-pip-{0}', variables('resourceLabelLower'))]",
@@ -83,6 +92,13 @@
             "name": "[variables('appGwSubnetName')]",
             "properties": {
               "addressPrefix": "10.0.2.0/24"
+            }
+          },
+          {
+            "name": "[variables('peSubnetName')]",
+            "properties": {
+              "addressPrefix": "10.0.3.0/24",
+              "privateEndpointNetworkPolicies": "Disabled"
             }
           }
         ]
@@ -424,7 +440,8 @@
         "consistencyPolicy": {
           "defaultConsistencyLevel": "Session"
         },
-        "enableFreeTier": false
+        "enableFreeTier": false,
+        "publicNetworkAccess": "[if(parameters('enablePrivateEndpoints'), 'Disabled', 'Enabled')]"
       }
     },
     {
@@ -509,6 +526,77 @@
       "dependsOn": [
         "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDbAccountName'))]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enablePrivateEndpoints')]",
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "privatelink.documents.azure.com",
+      "location": "global"
+    },
+    {
+      "condition": "[parameters('enablePrivateEndpoints')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2020-06-01",
+      "name": "[format('{0}/{1}', 'privatelink.documents.azure.com', format('{0}-cosmos-link', variables('vnetName')))]",
+      "location": "global",
+      "properties": {
+        "registrationEnabled": false,
+        "virtualNetwork": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.documents.azure.com')]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enablePrivateEndpoints')]",
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2023-04-01",
+      "name": "[format('pe-{0}', variables('cosmosDbAccountName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "subnet": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('peSubnetName'))]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "[format('pe-{0}-connection', variables('cosmosDbAccountName'))]",
+            "properties": {
+              "privateLinkServiceId": "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDbAccountName'))]",
+              "groupIds": [
+                "Sql"
+              ]
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDbAccountName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enablePrivateEndpoints')]",
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2023-04-01",
+      "name": "[format('{0}/{1}', format('pe-{0}', variables('cosmosDbAccountName')), 'cosmos-dns-zone-group')]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "privatelink-documents-azure-com",
+            "properties": {
+              "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.documents.azure.com')]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.documents.azure.com')]",
+        "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', variables('cosmosDbAccountName')))]"
       ]
     },
     {

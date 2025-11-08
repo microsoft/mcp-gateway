@@ -28,6 +28,13 @@ spec:
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: "Production"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
           envFrom:
             - configMapRef:
                 name: app-config
@@ -145,6 +152,13 @@ spec:
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: "Production"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
           envFrom:
             - configMapRef:
                 name: app-config

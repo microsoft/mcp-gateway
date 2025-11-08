@@ -10,6 +10,9 @@ param resourceLabel string = resourceGroup().name
 @description('The Azure region for resource deployment. Defaults to the resource group location.')
 param location string = resourceGroup().location
 
+@description('Enable private endpoints for Azure resources (ACR, Cosmos DB). When enabled, resources will only be accessible within the VNet.')
+param enablePrivateEndpoints bool = false
+
 var resourceLabelLower = toLower(resourceLabel)
 
 var aksNameBase = 'mg-aks-${resourceLabelLower}'
@@ -35,6 +38,9 @@ var aksSubnetName = substring(aksSubnetNameBase, 0, min(length(aksSubnetNameBase
 
 var appGwSubnetNameBase = 'mg-aag-subnet-${resourceLabelLower}'
 var appGwSubnetName = substring(appGwSubnetNameBase, 0, min(length(appGwSubnetNameBase), 80))
+
+var peSubnetNameBase = 'mg-pe-subnet-${resourceLabelLower}'
+var peSubnetName = substring(peSubnetNameBase, 0, min(length(peSubnetNameBase), 80))
 
 var appGwNameBase = 'mg-aag-${resourceLabelLower}'
 var appGwName = substring(appGwNameBase, 0, min(length(appGwNameBase), 80))
@@ -71,6 +77,13 @@ resource vnet 'Microsoft.Network/virtualNetworks@2022-07-01' = {
         name: appGwSubnetName
         properties: {
           addressPrefix: '10.0.2.0/24'
+        }
+      }
+      {
+        name: peSubnetName
+        properties: {
+          addressPrefix: '10.0.3.0/24'
+          privateEndpointNetworkPolicies: 'Disabled'
         }
       }
     ]
@@ -154,6 +167,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2023-04-01' = {
   }
   dependsOn: [vnet]
 }
+
 
 // Attach ACR to AKS
 resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -384,6 +398,7 @@ resource cosmosDb 'Microsoft.DocumentDB/databaseAccounts@2023-04-15' = {
       defaultConsistencyLevel: 'Session'
     }
     enableFreeTier: false
+    publicNetworkAccess: enablePrivateEndpoints ? 'Disabled' : 'Enabled'
   }
 }
 
@@ -449,6 +464,63 @@ resource cosmosDbRoleAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAs
     roleDefinitionId: resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions', cosmosDb.name, '00000000-0000-0000-0000-000000000002')
     principalId: uai.properties.principalId
     scope: cosmosDb.id
+  }
+}
+
+// Private DNS Zone for Cosmos DB
+resource cosmosPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (enablePrivateEndpoints) {
+  name: 'privatelink.documents.azure.com'
+  location: 'global'
+}
+
+// Link Private DNS Zone to VNet
+resource cosmosDnsZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = if (enablePrivateEndpoints) {
+  parent: cosmosPrivateDnsZone
+  name: '${vnetName}-cosmos-link'
+  location: 'global'
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnet.id
+    }
+  }
+}
+
+// Private Endpoint for Cosmos DB
+resource cosmosPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-04-01' = if (enablePrivateEndpoints) {
+  name: 'pe-${cosmosDbAccountName}'
+  location: location
+  properties: {
+    subnet: {
+      id: resourceId('Microsoft.Network/virtualNetworks/subnets', vnetName, peSubnetName)
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'pe-${cosmosDbAccountName}-connection'
+        properties: {
+          privateLinkServiceId: cosmosDb.id
+          groupIds: [
+            'Sql'
+          ]
+        }
+      }
+    ]
+  }
+  dependsOn: [vnet]
+}
+
+resource cosmosPrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-04-01' = if (enablePrivateEndpoints) {
+  parent: cosmosPrivateEndpoint
+  name: 'cosmos-dns-zone-group'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'privatelink-documents-azure-com'
+        properties: {
+          privateDnsZoneId: cosmosPrivateDnsZone.id
+        }
+      }
+    ]
   }
 }
 
