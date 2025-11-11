@@ -20,7 +20,7 @@ With this, you can transform **local-only MCP servers** into **cloud-accessible 
 - Make sure the cloud deployment has been done.
 - Build the MCP proxy server image in ACR.
   ```sh
-  az acr build -r "mgreg$resourceLabel" -f mcp-proxy-server/Dockerfile mcp-proxy-server -t "mgreg$resourceLabel.azurecr.io/mcp-proxy:1.0.0"
+  az acr build -r "mgreg$resourceLabel" -f sample-servers/mcp-proxy/Dockerfile sample-servers/mcp-proxy -t "mgreg$resourceLabel.azurecr.io/mcp-proxy:1.0.0"
   ```
 
 - Configure permissions for the workload identity principal (If setting up a local mcp server)

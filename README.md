@@ -13,8 +13,6 @@
 
 ## Overview
 
-#### *New*: Support for **Proxying Local & Remote MCP Servers**. See [examples and usage](mcp-proxy-server/README.md).
-
 This project provides:
 
 - A data gateway for routing traffic to MCP servers with session affinity.
@@ -161,6 +159,7 @@ For step-by-step guidance on configuring Azure Entra ID (creating `mcp.admin` an
 
 ### Additional Capabilities
 
+- *New*: Support for **Proxying Local & Remote MCP Servers**. See [examples and usage](sample-servers/mcp-proxy/README.md).
 - Stateless reverse proxy with a distributed session store (production mode).
 - Kubernetes-native deployment using StatefulSets and headless services.
 
@@ -203,7 +202,7 @@ The MCP Gateway now supports **tool registration** with dynamic routing capabili
 ### 3. Build & Publish MCP Server Images
 Build and push the MCP server images to your local registry (`localhost:5000`).
 ```sh
-docker build -f mcp-example-server/Dockerfile mcp-example-server -t localhost:5000/mcp-example:1.0.0
+docker build -f sample-servers/mcp-example/Dockerfile sample-servers/mcp-example -t localhost:5000/mcp-example:1.0.0
 docker push localhost:5000/mcp-example:1.0.0
 ```
 
@@ -276,7 +275,7 @@ kubectl port-forward -n adapter svc/mcpgateway-service 8000:8000
 
 First, build and push a tool server image to your local registry:
 ```sh
-docker build -f sample-tool-server/Dockerfile sample-tool-server -t localhost:5000/weather-tool:1.0.0
+docker build -f sample-servers/tool-example/Dockerfile sample-servers/tool-example -t localhost:5000/weather-tool:1.0.0
 docker push localhost:5000/weather-tool:1.0.0
 ```
 
@@ -434,7 +433,7 @@ The gateway service pulls the MCP server image from the newly provisioned Azure 
 Build the MCP server image in ACR:
 
 ```sh
-az acr build -r "mgreg$resourceLabel" -f mcp-example-server/Dockerfile mcp-example-server -t "mgreg$resourceLabel.azurecr.io/mcp-example:1.0.0"
+az acr build -r "mgreg$resourceLabel" -f sample-servers/mcp-example/Dockerfile sample-servers/mcp-example -t "mgreg$resourceLabel.azurecr.io/mcp-example:1.0.0"
 ```
 
 ### 5. Test the API - MCP Server Management
@@ -491,7 +490,7 @@ az acr build -r "mgreg$resourceLabel" -f mcp-example-server/Dockerfile mcp-examp
 
 Build and push a tool server image to ACR:
 ```sh
-az acr build -r "mgreg$resourceLabel" -f sample-tool-server/Dockerfile sample-tool-server -t "mgreg$resourceLabel.azurecr.io/weather-tool:1.0.0"
+az acr build -r "mgreg$resourceLabel" -f sample-servers/tool-example/Dockerfile sample-servers/tool-example -t "mgreg$resourceLabel.azurecr.io/weather-tool:1.0.0"
 ```
 
 #### Register a Tool
