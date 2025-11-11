@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.ComponentModel.DataAnnotations;
+using System.Linq;
 using System.Text.Json.Serialization;
 
 namespace Microsoft.McpGateway.Management.Contracts
@@ -54,6 +55,12 @@ namespace Microsoft.McpGateway.Management.Contracts
         [JsonPropertyOrder(7)]
         public bool UseWorkloadIdentity { get; set; } = false;
 
+        /// <summary>
+        /// Optional list of roles allowed to access this adapter besides the creator and admins.
+        /// </summary>
+        [JsonPropertyOrder(8)]
+        public IList<string> RequiredRoles { get; set; } = [];
+
         public AdapterData(
             string name,
             string imageName,
@@ -61,7 +68,8 @@ namespace Microsoft.McpGateway.Management.Contracts
             Dictionary<string, string>? environmentVariables = null,
             int? replicaCount = 1,
             string description = "",
-            bool useWorkloadIdentity = false)
+            bool useWorkloadIdentity = false,
+            IEnumerable<string>? requiredRoles = null)
         {
             ArgumentException.ThrowIfNullOrEmpty(name);
             ArgumentException.ThrowIfNullOrEmpty(imageName);
@@ -74,6 +82,7 @@ namespace Microsoft.McpGateway.Management.Contracts
             ReplicaCount = replicaCount ?? 1;
             Description = description;
             UseWorkloadIdentity = useWorkloadIdentity;
+            RequiredRoles = requiredRoles?.Where(static role => !string.IsNullOrWhiteSpace(role)).Select(static role => role.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList() ?? [];
         }
 
         public AdapterData() { }

@@ -4,8 +4,11 @@
 using Azure.Identity;
 using Microsoft.Azure.Cosmos;
 using Microsoft.McpGateway.Management.Store;
+using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Tools.Contracts;
 using Microsoft.McpGateway.Tools.Services;
+using System.Linq;
+using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -14,6 +17,8 @@ var builder = WebApplication.CreateBuilder(args);
 // Add logging
 builder.Services.AddLogging();
 
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
 // Add HttpClient for tool execution
 builder.Services.AddHttpClient();
 
@@ -84,5 +89,48 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 
 var app = builder.Build();
+
+app.Use(async (context, next) =>
+{
+    if (context.Request.Headers.TryGetValue(ForwardedIdentityHeaders.UserId, out var forwardedUserId) && !string.IsNullOrWhiteSpace(forwardedUserId))
+    {
+        var userId = forwardedUserId.ToString().Trim();
+        if (!string.IsNullOrWhiteSpace(userId))
+        {
+            var identity = new ClaimsIdentity("Forwarded");
+            identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, userId));
+
+            if (context.Request.Headers.TryGetValue(ForwardedIdentityHeaders.Roles, out var forwardedRoles))
+            {
+                var roles = forwardedRoles.ToString().Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                foreach (var role in roles.Where(role => !string.IsNullOrWhiteSpace(role)))
+                {
+                    identity.AddClaim(new Claim(ClaimTypes.Role, role));
+                }
+            }
+
+            context.User = new ClaimsPrincipal(identity);
+        }
+    }
+
+    await next().ConfigureAwait(false);
+});
+
+if (app.Environment.IsDevelopment())
+{
+    app.Use(async (context, next) =>
+    {
+        if (!context.User?.Identities?.Any(identity => identity.IsAuthenticated) ?? true)
+        {
+            var devIdentity = new ClaimsIdentity("Development");
+            devIdentity.AddClaim(new Claim(ClaimTypes.NameIdentifier, "dev"));
+            devIdentity.AddClaim(new Claim(ClaimTypes.Name, "dev"));
+            devIdentity.AddClaim(new Claim(ClaimTypes.Role, "mcp.dev"));
+            context.User = new ClaimsPrincipal(devIdentity);
+        }
+
+        await next().ConfigureAwait(false);
+    });
+}
 app.MapMcp();
 await app.RunAsync();

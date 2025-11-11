@@ -1,9 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Security.Claims;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Contracts;
 using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Tools.Services;
@@ -17,16 +20,51 @@ namespace Microsoft.McpGateway.Tools.Tests
     public class StorageToolDefinitionProviderTests
     {
         private readonly Mock<IToolResourceStore> _toolResourceStoreMock;
+        private readonly Mock<IPermissionProvider> _permissionProviderMock;
+        private readonly Mock<IHttpContextAccessor> _httpContextAccessorMock;
         private readonly Mock<ILogger<StorageToolDefinitionProvider>> _loggerMock;
         private readonly StorageToolDefinitionProvider _provider;
+        private HttpContext? _currentHttpContext;
 
         public StorageToolDefinitionProviderTests()
         {
             _toolResourceStoreMock = new Mock<IToolResourceStore>();
+            _permissionProviderMock = new Mock<IPermissionProvider>();
+            _httpContextAccessorMock = new Mock<IHttpContextAccessor>();
             _loggerMock = new Mock<ILogger<StorageToolDefinitionProvider>>();
+            _currentHttpContext = new DefaultHttpContext
+            {
+                User = CreatePrincipal()
+            };
+
+            _httpContextAccessorMock.Setup(x => x.HttpContext).Returns(() => _currentHttpContext);
+            SetupPermissionProviderToAllowAll();
+
             _provider = new StorageToolDefinitionProvider(
                 _toolResourceStoreMock.Object,
+                _permissionProviderMock.Object,
+                _httpContextAccessorMock.Object,
                 _loggerMock.Object);
+        }
+
+        private static ClaimsPrincipal CreatePrincipal(string userName = "test-user")
+        {
+            var identity = new ClaimsIdentity(
+                new[] { new Claim(ClaimTypes.Name, userName) },
+                "TestAuth");
+
+            return new ClaimsPrincipal(identity);
+        }
+
+        private void SetupPermissionProviderToAllowAll()
+        {
+            _permissionProviderMock
+                .Setup(x => x.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<IEnumerable<ToolResource>>(), Operation.Read))
+                .ReturnsAsync((ClaimsPrincipal _, IEnumerable<ToolResource> resources, Operation _) => resources.ToArray());
+
+            _permissionProviderMock
+                .Setup(x => x.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<ToolResource>(), Operation.Read))
+                .ReturnsAsync(true);
         }
 
         private static ToolResource CreateToolResource(
@@ -105,11 +143,36 @@ namespace Microsoft.McpGateway.Tools.Tests
             _toolResourceStoreMock.Setup(x => x.ListAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new List<ToolResource>());
 
+            _currentHttpContext = null;
+
             // Act
             var result = await _provider.GetToolDefinitionsAsync(CancellationToken.None);
 
             // Assert
             result.Should().BeEmpty();
+        }
+
+        [TestMethod]
+        public async Task GetToolDefinitionsAsync_ShouldFilterOutUnauthorizedTools()
+        {
+            // Arrange
+            var authorizedTool = CreateToolResource("authorized");
+            var unauthorizedTool = CreateToolResource("unauthorized");
+            var tools = new List<ToolResource> { authorizedTool, unauthorizedTool };
+
+            _toolResourceStoreMock.Setup(x => x.ListAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(tools);
+
+            _permissionProviderMock
+                .Setup(x => x.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<IEnumerable<ToolResource>>(), Operation.Read))
+                .ReturnsAsync((ClaimsPrincipal _, IEnumerable<ToolResource> resources, Operation _) =>
+                    resources.Where(r => r.ToolDefinition?.Tool.Name == "authorized").ToArray());
+
+            // Act
+            var result = await _provider.GetToolDefinitionsAsync(CancellationToken.None);
+
+            // Assert
+            result.Should().ContainSingle(td => td.Tool.Name == "authorized");
         }
 
         [TestMethod]
@@ -204,6 +267,46 @@ namespace Microsoft.McpGateway.Tools.Tests
         }
 
         [TestMethod]
+        public async Task GetToolDefinitionAsync_ShouldReturnNull_WhenPermissionDenied()
+        {
+            // Arrange
+            var toolName = "restricted";
+            var toolResource = CreateToolResource(toolName);
+
+            _toolResourceStoreMock.Setup(x => x.TryGetAsync(toolName, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(toolResource);
+
+            _permissionProviderMock
+                .Setup(x => x.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), toolResource, Operation.Read))
+                .ReturnsAsync(false);
+
+            // Act
+            var result = await _provider.GetToolDefinitionAsync(toolName, CancellationToken.None);
+
+            // Assert
+            result.Should().BeNull();
+        }
+
+        [TestMethod]
+        public async Task GetToolDefinitionAsync_ShouldReturnNull_WhenUserContextMissing()
+        {
+            // Arrange
+            var toolName = "test-tool";
+            var toolResource = CreateToolResource(toolName);
+
+            _toolResourceStoreMock.Setup(x => x.TryGetAsync(toolName, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(toolResource);
+
+            _currentHttpContext = null;
+
+            // Act
+            var result = await _provider.GetToolDefinitionAsync(toolName, CancellationToken.None);
+
+            // Assert
+            result.Should().BeNull();
+        }
+
+        [TestMethod]
         public async Task GetToolDefinitionAsync_ShouldReturnNull_WhenExceptionOccurs()
         {
             // Arrange
@@ -280,6 +383,29 @@ namespace Microsoft.McpGateway.Tools.Tests
             result.Tools.Should().Contain(t => t.Name == "tool1" && t.Description == "First tool");
             result.Tools.Should().Contain(t => t.Name == "tool2" && t.Description == "Second tool");
             result.NextCursor.Should().BeNull();
+        }
+
+        [TestMethod]
+        public async Task ListToolsAsync_ShouldReturnEmptyList_WhenUserContextMissing()
+        {
+            // Arrange
+            var tools = new List<ToolResource>
+            {
+                CreateToolResource("tool1")
+            };
+
+            _toolResourceStoreMock.Setup(x => x.ListAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(tools);
+
+            _currentHttpContext = null;
+
+            var context = CreateListToolsContext();
+
+            // Act
+            var result = await _provider.ListToolsAsync(context, CancellationToken.None);
+
+            // Assert
+            result.Tools.Should().BeEmpty();
         }
 
         [TestMethod]
@@ -416,7 +542,11 @@ namespace Microsoft.McpGateway.Tools.Tests
         public void Constructor_ShouldThrowArgumentNullException_WhenToolResourceStoreIsNull()
         {
             // Act
-            var act = () => new StorageToolDefinitionProvider(null!, _loggerMock.Object);
+            var act = () => new StorageToolDefinitionProvider(
+                null!,
+                _permissionProviderMock.Object,
+                _httpContextAccessorMock.Object,
+                _loggerMock.Object);
 
             // Assert
             act.Should().Throw<ArgumentNullException>();
@@ -426,7 +556,39 @@ namespace Microsoft.McpGateway.Tools.Tests
         public void Constructor_ShouldThrowArgumentNullException_WhenLoggerIsNull()
         {
             // Act
-            var act = () => new StorageToolDefinitionProvider(_toolResourceStoreMock.Object, null!);
+            var act = () => new StorageToolDefinitionProvider(
+                _toolResourceStoreMock.Object,
+                _permissionProviderMock.Object,
+                _httpContextAccessorMock.Object,
+                null!);
+
+            // Assert
+            act.Should().Throw<ArgumentNullException>();
+        }
+
+        [TestMethod]
+        public void Constructor_ShouldThrowArgumentNullException_WhenPermissionProviderIsNull()
+        {
+            // Act
+            var act = () => new StorageToolDefinitionProvider(
+                _toolResourceStoreMock.Object,
+                null!,
+                _httpContextAccessorMock.Object,
+                _loggerMock.Object);
+
+            // Assert
+            act.Should().Throw<ArgumentNullException>();
+        }
+
+        [TestMethod]
+        public void Constructor_ShouldThrowArgumentNullException_WhenHttpContextAccessorIsNull()
+        {
+            // Act
+            var act = () => new StorageToolDefinitionProvider(
+                _toolResourceStoreMock.Object,
+                _permissionProviderMock.Object,
+                null!,
+                _loggerMock.Object);
 
             // Assert
             act.Should().Throw<ArgumentNullException>();

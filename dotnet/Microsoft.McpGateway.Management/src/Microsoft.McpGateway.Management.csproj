@@ -8,12 +8,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="Authorization\**" />
-    <EmbeddedResource Remove="Authorization\**" />
-    <None Remove="Authorization\**" />
-  </ItemGroup>
-
-  <ItemGroup>
     <PackageReference Include="KubernetesClient" />
     <PackageReference Include="Microsoft.Azure.Cosmos" />
     <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" />

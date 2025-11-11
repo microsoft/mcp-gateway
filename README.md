@@ -1,6 +1,6 @@
 # MCP Gateway
 
-**MCP Gateway** is a reverse proxy and management layer for [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) servers, enabling scalable, session-aware routing and lifecycle management of MCP servers in Kubernetes environments.
+**MCP Gateway** is a reverse proxy and management layer for [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) servers, enabling scalable, session-aware routing, authorization and lifecycle management of MCP servers in Kubernetes environments.
 
 ## Table of Contents
 
@@ -150,9 +150,17 @@ flowchart LR
 
 - `POST /mcp` — Route requests to the tool gateway router, which dynamically routes to registered tools based on tool definitions. The router itself is an MCP server with multiple instances hosted behind the gateway for scalability.
 
+### Authentication & Authorization Support
+
+The gateway provides entra id authentication and basic application role authorization for mcp servers and tools:
+
+- **Read** access is granted to the resource creator, principals assigned the configured role values (for example `mcp.engineer`), and anyone holding the mandatory administrator role `mcp.admin`.
+- **Write** access is restricted to the resource creator or principals holding the `mcp.admin` role.
+
+For step-by-step guidance on configuring Azure Entra ID (creating `mcp.admin` and other role values, assigning them to users or service principals, and supplying those values in adapter/tool payloads), see [docs/entra-app-roles.md](docs/entra-app-roles.md).
+
 ### Additional Capabilities
 
-- Authentication and authorization support (production mode).
 - Stateless reverse proxy with a distributed session store (production mode).
 - Kubernetes-native deployment using StatefulSets and headless services.
 
@@ -386,6 +394,9 @@ To allow Azure CLI & VS Code to work as the client for token acquisition.
    - In Authorized scopes, select the scope `access`
    - Click **Add**
 
+#### Configure Application Role for Authorization
+[docs/entra-app-roles.md](docs/entra-app-roles.md)
+
 ### 3. Deploy Service Resources
 
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fmicrosoft%2Fmcp-gateway%2Fmain%2Fdeployment%2Finfra%2Fazure-deployment.json)
@@ -446,7 +457,8 @@ az acr build -r "mgreg$resourceLabel" -f mcp-example-server/Dockerfile mcp-examp
     "name": "mcp-example",
     "imageName": "mcp-example",
     "imageVersion": "1.0.0",
-    "description": "test"
+    "description": "test",
+    "requiredRoles": [] // Add entra id application role to restrict access
   }
   ```
 
@@ -502,6 +514,7 @@ Content-Type: application/json
   "imageVersion": "1.0.0",
   "useWorkloadIdentity": true,
   "description": "Weather tool for getting current weather information",
+  "requiredRoles": [], // Add entra id application role to restrict access
   "toolDefinition": {
     "tool": {
       "name": "weather",

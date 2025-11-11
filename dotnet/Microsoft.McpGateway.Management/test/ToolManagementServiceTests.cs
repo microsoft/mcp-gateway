@@ -1,9 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Collections.Generic;
+using System.Linq;
 using System.Security.Claims;
+using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
+using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Contracts;
 using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Service;
@@ -18,6 +22,7 @@ namespace Microsoft.McpGateway.Management.Tests
     {
         private readonly Mock<IAdapterDeploymentManager> _deploymentManagerMock;
         private readonly Mock<IToolResourceStore> _storeMock;
+        private readonly Mock<IPermissionProvider> _permissionProviderMock;
         private readonly Mock<ILogger<ToolManagementService>> _loggerMock;
         private readonly ToolManagementService _service;
         private readonly ClaimsPrincipal _accessContext;
@@ -26,8 +31,15 @@ namespace Microsoft.McpGateway.Management.Tests
         {
             _deploymentManagerMock = new Mock<IAdapterDeploymentManager>();
             _storeMock = new Mock<IToolResourceStore>();
+            _permissionProviderMock = new Mock<IPermissionProvider>();
             _loggerMock = new Mock<ILogger<ToolManagementService>>();
-            _service = new ToolManagementService(_deploymentManagerMock.Object, _storeMock.Object, _loggerMock.Object);
+            _permissionProviderMock.Setup(x => x.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<IManagedResource>(), Operation.Read))
+                .ReturnsAsync(true);
+            _permissionProviderMock.Setup(x => x.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<IManagedResource>(), Operation.Write))
+                .ReturnsAsync(true);
+            _permissionProviderMock.Setup(x => x.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<IEnumerable<ToolResource>>(), Operation.Read))
+                .ReturnsAsync((ClaimsPrincipal _, IEnumerable<ToolResource> resources, Operation _) => resources.ToArray());
+            _service = new ToolManagementService(_deploymentManagerMock.Object, _storeMock.Object, _permissionProviderMock.Object, _loggerMock.Object);
             _accessContext = new ClaimsPrincipal(new ClaimsIdentity([new(ClaimTypes.NameIdentifier, "user1")]));
         }
 
@@ -132,6 +144,22 @@ namespace Microsoft.McpGateway.Management.Tests
         }
 
         [TestMethod]
+        public async Task GetAsync_ShouldThrowUnauthorizedAccessException_WhenUserIsNotAllowed()
+        {
+            var tool = ToolResource.Create(CreateToolData("restricted"), "differentUser", DateTimeOffset.UtcNow);
+            _storeMock.Setup(x => x.TryGetAsync("restricted", It.IsAny<CancellationToken>())).ReturnsAsync(tool);
+            _permissionProviderMock.Setup(x => x.CheckAccessAsync(
+                It.IsAny<ClaimsPrincipal>(),
+                It.Is<IManagedResource>(resource => resource.Name == tool.Name),
+                Operation.Read)).ReturnsAsync(false);
+
+            Func<Task> act = () => _service.GetAsync(_accessContext, "restricted", CancellationToken.None);
+
+            await act.Should().ThrowAsync<UnauthorizedAccessException>()
+                .WithMessage("You do not have permission to perform the operation.");
+        }
+
+        [TestMethod]
         public async Task GetAsync_ShouldThrowArgumentNullException_WhenAccessContextIsNull()
         {
             Func<Task> act = () => _service.GetAsync(null!, "tool1", CancellationToken.None);
@@ -211,7 +239,7 @@ namespace Microsoft.McpGateway.Management.Tests
             Func<Task> act = () => _service.UpdateAsync(_accessContext, request, CancellationToken.None);
 
             await act.Should().ThrowAsync<ArgumentException>()
-                .WithMessage("The tool does not exist.");
+                .WithMessage("The tool does not exist and cannot be updated.");
         }
 
         [TestMethod]
@@ -220,6 +248,10 @@ namespace Microsoft.McpGateway.Management.Tests
             var existing = ToolResource.Create(CreateToolData("tool1", "image", "v1"), "differentUser", DateTimeOffset.UtcNow);
             var request = CreateToolData("tool1", "new-image", "v2");
             _storeMock.Setup(x => x.TryGetAsync("tool1", It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+            _permissionProviderMock.Setup(x => x.CheckAccessAsync(
+                It.IsAny<ClaimsPrincipal>(),
+                It.Is<IManagedResource>(resource => resource.Name == existing.Name),
+                Operation.Write)).ReturnsAsync(false);
 
             Func<Task> act = () => _service.UpdateAsync(_accessContext, request, CancellationToken.None);
 
@@ -255,6 +287,10 @@ namespace Microsoft.McpGateway.Management.Tests
         {
             var existing = ToolResource.Create(CreateToolData("tool1"), "differentUser", DateTimeOffset.UtcNow);
             _storeMock.Setup(x => x.TryGetAsync("tool1", It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+            _permissionProviderMock.Setup(x => x.CheckAccessAsync(
+                It.IsAny<ClaimsPrincipal>(),
+                It.Is<IManagedResource>(resource => resource.Name == existing.Name),
+                Operation.Write)).ReturnsAsync(false);
 
             Func<Task> act = () => _service.DeleteAsync(_accessContext, "tool1", CancellationToken.None);
 
@@ -294,6 +330,20 @@ namespace Microsoft.McpGateway.Management.Tests
         }
 
         [TestMethod]
+        public async Task ListAsync_ShouldFilterUnauthorizedTools()
+        {
+            var tool1 = ToolResource.Create(CreateToolData("tool1", "image1", "v1"), "user1", DateTimeOffset.UtcNow);
+            var tool2 = ToolResource.Create(CreateToolData("tool2", "image2", "v1"), "user2", DateTimeOffset.UtcNow);
+            _storeMock.Setup(x => x.ListAsync(It.IsAny<CancellationToken>())).ReturnsAsync([tool1, tool2]);
+            _permissionProviderMock.Setup(x => x.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<IEnumerable<ToolResource>>(), Operation.Read))
+                .ReturnsAsync((ClaimsPrincipal _, IEnumerable<ToolResource> resources, Operation _) => resources.Where(r => r.Name == tool1.Name).ToArray());
+
+            var result = await _service.ListAsync(_accessContext, CancellationToken.None);
+
+            result.Should().BeEquivalentTo(new[] { tool1 });
+        }
+
+        [TestMethod]
         public async Task ListAsync_ShouldThrowArgumentNullException_WhenAccessContextIsNull()
         {
             Func<Task> act = () => _service.ListAsync(null!, CancellationToken.None);
@@ -304,7 +354,7 @@ namespace Microsoft.McpGateway.Management.Tests
         [TestMethod]
         public void Constructor_ShouldThrowArgumentNullException_WhenDeploymentManagerIsNull()
         {
-            var act = () => new ToolManagementService(null!, _storeMock.Object, _loggerMock.Object);
+            var act = () => new ToolManagementService(null!, _storeMock.Object, _permissionProviderMock.Object, _loggerMock.Object);
 
             act.Should().Throw<ArgumentNullException>().WithParameterName("adapterDeploymentManager");
         }
@@ -312,15 +362,23 @@ namespace Microsoft.McpGateway.Management.Tests
         [TestMethod]
         public void Constructor_ShouldThrowArgumentNullException_WhenStoreIsNull()
         {
-            var act = () => new ToolManagementService(_deploymentManagerMock.Object, null!, _loggerMock.Object);
+            var act = () => new ToolManagementService(_deploymentManagerMock.Object, null!, _permissionProviderMock.Object, _loggerMock.Object);
 
             act.Should().Throw<ArgumentNullException>().WithParameterName("store");
         }
 
         [TestMethod]
+        public void Constructor_ShouldThrowArgumentNullException_WhenPermissionProviderIsNull()
+        {
+            var act = () => new ToolManagementService(_deploymentManagerMock.Object, _storeMock.Object, null!, _loggerMock.Object);
+
+            act.Should().Throw<ArgumentNullException>().WithParameterName("permissionProvider");
+        }
+
+        [TestMethod]
         public void Constructor_ShouldThrowArgumentNullException_WhenLoggerIsNull()
         {
-            var act = () => new ToolManagementService(_deploymentManagerMock.Object, _storeMock.Object, null!);
+            var act = () => new ToolManagementService(_deploymentManagerMock.Object, _storeMock.Object, _permissionProviderMock.Object, null!);
 
             act.Should().Throw<ArgumentNullException>().WithParameterName("logger");
         }

@@ -1,11 +1,12 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Linq;
 using System.Text.Json.Serialization;
 
 namespace Microsoft.McpGateway.Management.Contracts
 {
-    public class AdapterResource : AdapterData
+    public class AdapterResource : AdapterData, IManagedResource
     {
         [JsonPropertyOrder(-1)]
         [JsonPropertyName("id")]
@@ -50,7 +51,8 @@ namespace Microsoft.McpGateway.Management.Contracts
                 CreatedBy = createdBy,
                 CreatedAt = createdAt,
                 LastUpdatedAt = DateTime.UtcNow,
-                UseWorkloadIdentity = data.UseWorkloadIdentity
+                UseWorkloadIdentity = data.UseWorkloadIdentity,
+                RequiredRoles = data.RequiredRoles?.ToList() ?? []
             };
 
         public AdapterResource() { }

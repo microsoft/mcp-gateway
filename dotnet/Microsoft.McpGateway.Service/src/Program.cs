@@ -2,17 +2,19 @@
 // Licensed under the MIT License.
 
 using Azure.Identity;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Azure.Cosmos.Fluent;
 using Microsoft.Identity.Web;
+using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Service;
 using Microsoft.McpGateway.Management.Store;
+using Microsoft.McpGateway.Service.Authentication;
 using Microsoft.McpGateway.Service.Routing;
 using Microsoft.McpGateway.Service.Session;
 using ModelContextProtocol.AspNetCore.Authentication;
-using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -29,16 +31,20 @@ builder.Services.AddSingleton<ISessionRoutingHandler, AdapterSessionRoutingHandl
 
 if (builder.Environment.IsDevelopment())
 {
+    builder.Services
+        .AddAuthentication(DevelopmentAuthenticationHandler.SchemeName)
+        .AddScheme<AuthenticationSchemeOptions, DevelopmentAuthenticationHandler>(DevelopmentAuthenticationHandler.SchemeName, null);
+
     var redisConnection = builder.Configuration.GetValue<string>("Redis:ConnectionString") ?? "localhost:6379";
     builder.Services.AddStackExchangeRedisCache(options =>
     {
         options.Configuration = redisConnection;
         options.InstanceName = "mcpgateway:";
     });
-    
+
     builder.Services.AddSingleton<IAdapterResourceStore, RedisAdapterResourceStore>();
     builder.Services.AddSingleton<IToolResourceStore, RedisToolResourceStore>();
-    
+
     builder.Logging.AddConsole();
     builder.Logging.SetMinimumLevel(LogLevel.Debug);
 }
@@ -103,6 +109,7 @@ builder.Services.AddSingleton<IKubeClientWrapper>(c =>
     var kubeClientFactory = c.GetRequiredService<IKubernetesClientFactory>();
     return new KubeClient(kubeClientFactory, "adapter");
 });
+builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
 builder.Services.AddSingleton<IAdapterDeploymentManager>(c =>
 {
     var config = builder.Configuration.GetSection("ContainerRegistrySettings");
@@ -122,17 +129,6 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 
 var app = builder.Build();
-
-if (app.Environment.IsDevelopment())
-{
-    app.Use(async (context, next) =>
-    {
-        var devIdentity = new ClaimsIdentity("Development");
-        devIdentity.AddClaim(new Claim(ClaimTypes.Name, "dev"));
-        context.User = new ClaimsPrincipal(devIdentity);
-        await next();
-    });
-}
 
 // Configure the HTTP request pipeline.
 app.UseAuthentication();
