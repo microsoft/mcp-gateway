@@ -3,6 +3,8 @@
 
 using Microsoft.AspNetCore.Http.Extensions;
 using Microsoft.Net.Http.Headers;
+using Microsoft.McpGateway.Management.Authorization;
+using Microsoft.McpGateway.Management.Extensions;
 
 namespace Microsoft.McpGateway.Service
 {
@@ -25,6 +27,28 @@ namespace Microsoft.McpGateway.Service
 
                 if (!requestMessage.Headers.TryAddWithoutValidation(header.Key, [.. header.Value]))
                     requestMessage.Content?.Headers.TryAddWithoutValidation(header.Key, [.. header.Value]);
+            }
+
+            // Ensure downstream services only receive sanitized identity headers
+            requestMessage.Headers.Remove(ForwardedIdentityHeaders.UserId);
+            requestMessage.Headers.Remove(ForwardedIdentityHeaders.UserName);
+            requestMessage.Headers.Remove(ForwardedIdentityHeaders.Roles);
+            requestMessage.Content?.Headers.Remove(ForwardedIdentityHeaders.UserId);
+            requestMessage.Content?.Headers.Remove(ForwardedIdentityHeaders.UserName);
+            requestMessage.Content?.Headers.Remove(ForwardedIdentityHeaders.Roles);
+
+            var principal = context.User;
+            if (principal?.Identity?.IsAuthenticated == true)
+            {
+                var userId = principal.GetUserId() ?? principal.Identity?.Name;
+
+                if (!string.IsNullOrWhiteSpace(userId))
+                    requestMessage.Headers.TryAddWithoutValidation(ForwardedIdentityHeaders.UserId, userId);
+
+                var roles = principal.GetUserRoles();
+
+                if (roles.Count > 0)
+                    requestMessage.Headers.TryAddWithoutValidation(ForwardedIdentityHeaders.Roles, string.Join(',', roles));
             }
 
             requestMessage.Headers.TryAddWithoutValidation("Forwarded", $"for={context.Connection.RemoteIpAddress};proto={context.Request.Scheme};host={context.Request.Host.Value}");

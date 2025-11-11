@@ -1,9 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Linq;
 using System.Security.Claims;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
+using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Contracts;
 using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Extensions;
@@ -20,15 +22,18 @@ namespace Microsoft.McpGateway.Management.Service
         private const string NamePattern = "^[a-z0-9-]+$";
         private readonly IAdapterDeploymentManager _deploymentManager;
         private readonly IToolResourceStore _store;
+        private readonly IPermissionProvider _permissionProvider;
         private readonly ILogger _logger;
 
         public ToolManagementService(
             IAdapterDeploymentManager adapterDeploymentManager,
             IToolResourceStore store,
+            IPermissionProvider permissionProvider,
             ILogger<ToolManagementService> logger)
         {
             _deploymentManager = adapterDeploymentManager ?? throw new ArgumentNullException(nameof(adapterDeploymentManager));
             _store = store ?? throw new ArgumentNullException(nameof(store));
+            _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
@@ -68,8 +73,14 @@ namespace Microsoft.McpGateway.Management.Service
             ArgumentException.ThrowIfNullOrEmpty(name);
 
             _logger.LogInformation("Start getting /tools/{name}.", name.Sanitize());
-            await CheckReadAccessAsync(accessContext, name, cancellationToken).ConfigureAwait(false);
-            return await _store.TryGetAsync(name, cancellationToken).ConfigureAwait(false);
+            var tool = await _store.TryGetAsync(name, cancellationToken).ConfigureAwait(false);
+            if (tool == null)
+            {
+                return null;
+            }
+
+            await EnsureAccessAsync(accessContext, tool, Operation.Read).ConfigureAwait(false);
+            return tool;
         }
 
         public async Task<ToolResource> UpdateAsync(ClaimsPrincipal accessContext, ToolData request, CancellationToken cancellationToken)
@@ -79,9 +90,10 @@ namespace Microsoft.McpGateway.Management.Service
 
             _logger.LogInformation("Start updating /tools/{name}.", request.Name.Sanitize());
 
-            await CheckWriteAccessAsync(accessContext, request.Name, cancellationToken).ConfigureAwait(false);
             var existing = await _store.TryGetAsync(request.Name, cancellationToken).ConfigureAwait(false)
                 ?? throw new ArgumentException("The tool does not exist and cannot be updated.");
+
+            await EnsureAccessAsync(accessContext, existing, Operation.Write).ConfigureAwait(false);
 
             // Throw if any change on unchangeable fields
             if (existing.Name != request.Name)
@@ -112,7 +124,10 @@ namespace Microsoft.McpGateway.Management.Service
             ArgumentException.ThrowIfNullOrEmpty(name);
 
             _logger.LogInformation("Start deleting /tools/{name}.", name.Sanitize());
-            await CheckWriteAccessAsync(accessContext, name, cancellationToken).ConfigureAwait(false);
+            var existing = await _store.TryGetAsync(name, cancellationToken).ConfigureAwait(false)
+                ?? throw new ArgumentException("The tool does not exist.");
+
+            await EnsureAccessAsync(accessContext, existing, Operation.Write).ConfigureAwait(false);
 
             _logger.LogInformation("Start deleting storage record for /tools/{name}.", name.Sanitize());
             await _store.DeleteAsync(name, cancellationToken).ConfigureAwait(false);
@@ -126,34 +141,36 @@ namespace Microsoft.McpGateway.Management.Service
             ArgumentNullException.ThrowIfNull(accessContext);
 
             _logger.LogInformation("Start listing /tools for user.");
-            var toolResources = await _store.ListAsync(cancellationToken).ConfigureAwait(false);
-            var allowedResources = await CheckReadAccessAsync(accessContext, toolResources, cancellationToken).ConfigureAwait(false);
+            var toolResources = (await _store.ListAsync(cancellationToken).ConfigureAwait(false)).ToList();
+            var allowedResources = await _permissionProvider.CheckAccessAsync(accessContext, toolResources, Operation.Read).ConfigureAwait(false);
+
+            var filteredCount = toolResources.Count - allowedResources.Length;
+            if (filteredCount > 0)
+            {
+                _logger.LogInformation("Filtered {count} tool resources due to authorization.", filteredCount);
+            }
 
             return allowedResources;
         }
 
-        private async Task CheckWriteAccessAsync(ClaimsPrincipal accessContext, string resourceName, CancellationToken cancellationToken)
+        private async Task EnsureAccessAsync(ClaimsPrincipal accessContext, ToolResource resource, Operation operation)
         {
             ArgumentNullException.ThrowIfNull(accessContext);
-            ArgumentException.ThrowIfNullOrEmpty(resourceName);
+            ArgumentNullException.ThrowIfNull(resource);
 
-            var existing = await _store.TryGetAsync(resourceName, cancellationToken).ConfigureAwait(false)
-                    ?? throw new ArgumentException("The tool does not exist.");
-            var allowedAccess = existing.CreatedBy == accessContext.GetUserId();
-
-            if (!allowedAccess)
+            if (await _permissionProvider.CheckAccessAsync(accessContext, resource, operation).ConfigureAwait(false))
             {
-                _logger.LogWarning("User {userId} is denied access for resource {resourceId} after checking access.", accessContext.GetUserId(), resourceName.Sanitize());
-                throw new UnauthorizedAccessException("You do not have permission to perform the operation.");
+                if (operation == Operation.Write)
+                {
+                    _logger.LogInformation("User {userId} is authorized for write operations on tool {resourceId}.", accessContext.GetUserId(), resource.Name.Sanitize());
+                }
+
+                return;
             }
 
-            _logger.LogInformation("User {userId} is authorized for resource {resourceId} checking access", accessContext.GetUserId(), resourceName.Sanitize());
+            var operationName = operation.ToString().ToLowerInvariant();
+            _logger.LogWarning("User {userId} is denied {operation} access for tool {resourceId}.", accessContext.GetUserId(), operationName, resource.Name.Sanitize());
+            throw new UnauthorizedAccessException("You do not have permission to perform the operation.");
         }
-
-        // Allow all read access
-        private Task CheckReadAccessAsync(ClaimsPrincipal accessContext, string resourceName, CancellationToken cancellationToken) => Task.CompletedTask;
-
-        // Allow all read access
-        private Task<IEnumerable<ToolResource>> CheckReadAccessAsync(ClaimsPrincipal accessContext, IEnumerable<ToolResource> resources, CancellationToken cancellationToken) => Task.FromResult(resources);
     }
 }

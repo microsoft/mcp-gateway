@@ -1,6 +1,7 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Contracts;
 using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Tools.Contracts;
@@ -17,8 +18,10 @@ namespace Microsoft.McpGateway.Tools.Services
         private const int CacheExpirationMinutes = 5;
 
         private readonly IToolResourceStore _toolResourceStore;
+        private readonly IPermissionProvider _permissionProvider;
+        private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly ILogger<StorageToolDefinitionProvider> _logger;
-        private List<ToolDefinition>? _cachedTools;
+        private List<ToolResource>? _cachedToolResources;
         private DateTime _lastLoadTime;
 
         /// <summary>
@@ -26,12 +29,18 @@ namespace Microsoft.McpGateway.Tools.Services
         /// </summary>
         public StorageToolDefinitionProvider(
             IToolResourceStore toolResourceStore,
+            IPermissionProvider permissionProvider,
+            IHttpContextAccessor httpContextAccessor,
             ILogger<StorageToolDefinitionProvider> logger)
         {
             ArgumentNullException.ThrowIfNull(toolResourceStore);
+            ArgumentNullException.ThrowIfNull(permissionProvider);
+            ArgumentNullException.ThrowIfNull(httpContextAccessor);
             ArgumentNullException.ThrowIfNull(logger);
 
             _toolResourceStore = toolResourceStore;
+            _permissionProvider = permissionProvider;
+            _httpContextAccessor = httpContextAccessor;
             _logger = logger;
 
             _logger.LogInformation("Storage tool definition provider initialized");
@@ -42,26 +51,21 @@ namespace Microsoft.McpGateway.Tools.Services
             var cacheExpiration = TimeSpan.FromMinutes(CacheExpirationMinutes);
 
             // Simple caching mechanism
-            if (_cachedTools != null && DateTime.UtcNow - _lastLoadTime < cacheExpiration)
+            if (_cachedToolResources != null && DateTime.UtcNow - _lastLoadTime < cacheExpiration)
             {
-                return _cachedTools;
+                return await FilterToolDefinitionsAsync(_cachedToolResources, cancellationToken).ConfigureAwait(false);
             }
 
             try
             {
                 // Get all tool resources from the store
-                var toolResources = await _toolResourceStore.ListAsync(cancellationToken).ConfigureAwait(false);
+                var toolResources = (await _toolResourceStore.ListAsync(cancellationToken).ConfigureAwait(false)).ToList();
 
-                // Extract tool definitions from resources
-                var toolDefinitions = toolResources
-                    .Select(tr => tr.ToolDefinition)
-                    .ToList();
-
-                _cachedTools = toolDefinitions;
+                _cachedToolResources = toolResources;
                 _lastLoadTime = DateTime.UtcNow;
 
-                _logger.LogInformation("Loaded {Count} tool definitions from store", _cachedTools.Count);
-                return _cachedTools;
+                _logger.LogInformation("Loaded {Count} tool resources from store", _cachedToolResources.Count);
+                return await FilterToolDefinitionsAsync(toolResources, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -74,9 +78,26 @@ namespace Microsoft.McpGateway.Tools.Services
         {
             try
             {
-                // Try to get the specific tool resource directly
                 var toolResource = await _toolResourceStore.TryGetAsync(toolName, cancellationToken).ConfigureAwait(false);
-                return toolResource?.ToolDefinition;
+                if (toolResource == null)
+                {
+                    return null;
+                }
+
+                var principal = _httpContextAccessor.HttpContext?.User;
+                if (principal == null)
+                {
+                    _logger.LogWarning("Missing user context while retrieving tool definition for {ToolName}", toolName);
+                    return null;
+                }
+
+                if (!await _permissionProvider.CheckAccessAsync(principal, toolResource, Operation.Read).ConfigureAwait(false))
+                {
+                    _logger.LogWarning("User {UserId} denied read access when retrieving tool definition for {ToolName}", principal.Identity?.Name, toolName);
+                    return null;
+                }
+
+                return toolResource.ToolDefinition;
             }
             catch (Exception ex)
             {
@@ -102,6 +123,22 @@ namespace Microsoft.McpGateway.Tools.Services
                 Tools = tools,
                 NextCursor = null
             };
+        }
+
+        private async Task<List<ToolDefinition>> FilterToolDefinitionsAsync(IEnumerable<ToolResource> toolResources, CancellationToken cancellationToken)
+        {
+            var principal = _httpContextAccessor.HttpContext?.User;
+            if (principal == null)
+            {
+                _logger.LogWarning("Missing user context while filtering tool definitions");
+                return [];
+            }
+
+            var allowedResources = await _permissionProvider.CheckAccessAsync(principal, toolResources, Operation.Read).ConfigureAwait(false);
+            return allowedResources
+                .Where(resource => resource.ToolDefinition != null)
+                .Select(resource => resource.ToolDefinition!)
+                .ToList();
         }
     }
 }

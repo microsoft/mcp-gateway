@@ -4,6 +4,7 @@
 using System.Security.Claims;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
+using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Contracts;
 using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Extensions;
@@ -11,11 +12,12 @@ using Microsoft.McpGateway.Management.Store;
 
 namespace Microsoft.McpGateway.Management.Service
 {
-    public class AdapterManagementService(IAdapterDeploymentManager adapterDeploymentManager, IAdapterResourceStore store, ILogger<AdapterManagementService> logger) : IAdapterManagementService
+    public class AdapterManagementService(IAdapterDeploymentManager adapterDeploymentManager, IAdapterResourceStore store, IPermissionProvider permissionProvider, ILogger<AdapterManagementService> logger) : IAdapterManagementService
     {
         private const string NamePattern = "^[a-z0-9-]+$";
         private readonly IAdapterDeploymentManager _deploymentManager = adapterDeploymentManager ?? throw new ArgumentNullException(nameof(adapterDeploymentManager));
         private readonly IAdapterResourceStore _store = store ?? throw new ArgumentNullException(nameof(store));
+        private readonly IPermissionProvider _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
         private readonly ILogger _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         public async Task<AdapterResource> CreateAsync(ClaimsPrincipal accessContext, AdapterData request, CancellationToken cancellationToken)
@@ -33,9 +35,10 @@ namespace Microsoft.McpGateway.Management.Service
                 throw new ArgumentException("The adapter with the same name already exist.");
             }
 
-            var adapter = AdapterResource.Create(request, accessContext.GetUserId()!, DateTimeOffset.UtcNow);
+            var userId = accessContext.GetUserId()!;
+            var adapter = AdapterResource.Create(request, userId, DateTimeOffset.UtcNow);
 
-            logger.LogInformation("Start creating /adapters/{name}.", request.Name.Sanitize());
+            logger.LogInformation("Start creating /adapters/{name}, creator {userId}", request.Name.Sanitize(), userId);
 
             logger.LogInformation("Start kubernetes deployment for /adapters/{name}.", request.Name.Sanitize());
             await _deploymentManager.CreateDeploymentAsync(request, ResourceType.Mcp, cancellationToken).ConfigureAwait(false);
@@ -51,9 +54,14 @@ namespace Microsoft.McpGateway.Management.Service
             ArgumentException.ThrowIfNullOrEmpty(name);
 
             logger.LogInformation("Start getting /adapters/{name}.", name.Sanitize());
+            var adapter = await _store.TryGetAsync(name, cancellationToken).ConfigureAwait(false);
+            if (adapter == null)
+            {
+                return null;
+            }
 
-            await CheckReadAccessAsync(accessContext, name, cancellationToken).ConfigureAwait(false);
-            return await _store.TryGetAsync(name, cancellationToken).ConfigureAwait(false);
+            await EnsureAccessAsync(accessContext, adapter, Operation.Read).ConfigureAwait(false);
+            return adapter;
         }
 
         public async Task<AdapterResource> UpdateAsync(ClaimsPrincipal accessContext, AdapterData request, CancellationToken cancellationToken)
@@ -63,9 +71,10 @@ namespace Microsoft.McpGateway.Management.Service
 
             logger.LogInformation("Start updating /adapters/{name}.", request.Name.Sanitize());
 
-            await CheckWriteAccessAsync(accessContext, request.Name, cancellationToken).ConfigureAwait(false);
             var existing = await _store.TryGetAsync(request.Name, cancellationToken).ConfigureAwait(false)
                 ?? throw new ArgumentException("The adapter does not exist and cannot be updated.");
+
+            await EnsureAccessAsync(accessContext, existing, Operation.Write).ConfigureAwait(false);
 
             // Throw if any change on Unchangeable fields
             if (existing.Name != request.Name)
@@ -94,7 +103,10 @@ namespace Microsoft.McpGateway.Management.Service
             ArgumentException.ThrowIfNullOrEmpty(name);
 
             logger.LogInformation("Start deleting /adapters/{name}.", name.Sanitize());
-            await CheckWriteAccessAsync(accessContext, name, cancellationToken).ConfigureAwait(false);
+            var existing = await _store.TryGetAsync(name, cancellationToken).ConfigureAwait(false)
+                ?? throw new ArgumentException("The adapter does not exist.");
+
+            await EnsureAccessAsync(accessContext, existing, Operation.Write).ConfigureAwait(false);
 
             logger.LogInformation("Start deleting storage record for /adapters/{name}.", name.Sanitize());
             await _store.DeleteAsync(name, cancellationToken).ConfigureAwait(false);
@@ -108,34 +120,36 @@ namespace Microsoft.McpGateway.Management.Service
             ArgumentNullException.ThrowIfNull(accessContext);
 
             logger.LogInformation("Start listing /adapters for user.");
-            var adapterResources = await _store.ListAsync(cancellationToken).ConfigureAwait(false);
-            var allowedResources = await CheckReadAccessAsync(accessContext, adapterResources, cancellationToken).ConfigureAwait(false);
+            var adapterResources = (await _store.ListAsync(cancellationToken).ConfigureAwait(false)).ToList();
+            var allowedResources = await _permissionProvider.CheckAccessAsync(accessContext, adapterResources, Operation.Read).ConfigureAwait(false);
+
+            var filteredCount = adapterResources.Count - allowedResources.Length;
+            if (filteredCount > 0)
+            {
+                logger.LogInformation("Filtered {count} adapter resources due to authorization.", filteredCount);
+            }
 
             return allowedResources;
         }
 
-        private async Task CheckWriteAccessAsync(ClaimsPrincipal accessContext, string resouceName, CancellationToken cancellationToken)
+        private async Task EnsureAccessAsync(ClaimsPrincipal accessContext, AdapterResource resource, Operation operation)
         {
             ArgumentNullException.ThrowIfNull(accessContext);
-            ArgumentException.ThrowIfNullOrEmpty(resouceName);
+            ArgumentNullException.ThrowIfNull(resource);
 
-            var existing = await _store.TryGetAsync(resouceName, cancellationToken).ConfigureAwait(false)
-                    ?? throw new ArgumentException("The adapter does not exist.");
-            var allowedAccess = existing.CreatedBy == accessContext.GetUserId();
-
-            if (!allowedAccess)
+            if (await _permissionProvider.CheckAccessAsync(accessContext, resource, operation).ConfigureAwait(false))
             {
-                _logger.LogWarning("User {userId} is denied access for resource {resourceId} after checking access.", accessContext.GetUserId(), resouceName.Sanitize());
-                throw new UnauthorizedAccessException("You do not have permission to perform the operation.");
+                if (operation == Operation.Write)
+                {
+                    logger.LogInformation("User {userId} is authorized for write operations on adapter {resourceId}.", accessContext.GetUserId(), resource.Name.Sanitize());
+                }
+
+                return;
             }
 
-            _logger.LogInformation("User {userId} is authorized for resource {resourceId} checking access", accessContext.GetUserId(), resouceName.Sanitize());
+            var operationName = operation.ToString().ToLowerInvariant();
+            logger.LogWarning("User {userId} is denied {operation} access for adapter {resourceId}.", accessContext.GetUserId(), operationName, resource.Name.Sanitize());
+            throw new UnauthorizedAccessException("You do not have permission to perform the operation.");
         }
-
-        // Allow all read access
-        private Task CheckReadAccessAsync(ClaimsPrincipal accessContext, string resourceName, CancellationToken cancellationToken) => Task.CompletedTask;
-
-        // Allow all read access
-        private Task<IEnumerable<AdapterResource>> CheckReadAccessAsync(ClaimsPrincipal accessContext, IEnumerable<AdapterResource> resources, CancellationToken cancellationToken) => Task.FromResult(resources);
     }
 }

@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -9,7 +10,7 @@ namespace Microsoft.McpGateway.Management.Contracts
     /// <summary>
     /// Represents a tool resource with metadata.
     /// </summary>
-    public class ToolResource : ToolData
+    public class ToolResource : ToolData, IManagedResource
     {
         [JsonPropertyOrder(-1)]
         [JsonPropertyName("id")]
@@ -45,6 +46,7 @@ namespace Microsoft.McpGateway.Management.Contracts
                 Description = data.Description,
                 UseWorkloadIdentity = data.UseWorkloadIdentity,
                 ToolDefinition = data.ToolDefinition,
+                RequiredRoles = data.RequiredRoles?.ToList() ?? [],
                 CreatedBy = createdBy,
                 CreatedAt = createdAt,
                 LastUpdatedAt = DateTimeOffset.UtcNow,

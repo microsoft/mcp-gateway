@@ -39,33 +39,54 @@ namespace Microsoft.McpGateway.Service.Controllers
         [HttpGet("{name}")]
         public async Task<IActionResult> GetTool(string name, CancellationToken cancellationToken)
         {
-            var tool = await _managementService.GetAsync(HttpContext.User, name, cancellationToken).ConfigureAwait(false);
-            if (tool == null)
-                return NotFound();
-            else
-                return Ok(tool);
+            try
+            {
+                var tool = await _managementService.GetAsync(HttpContext.User, name, cancellationToken).ConfigureAwait(false);
+                if (tool == null)
+                    return NotFound();
+                else
+                    return Ok(tool);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Forbid();
+            }
         }
 
         // GET /tools/{name}/status
         [HttpGet("{name}/status")]
         public async Task<IActionResult> GetToolStatus(string name, CancellationToken cancellationToken)
         {
-            var tool = await _managementService.GetAsync(HttpContext.User, name, cancellationToken).ConfigureAwait(false);
-            if (tool == null)
-                return NotFound();
-            else
-                return Ok(await _adapterRichResultProvider.GetAdapterStatusAsync(tool.Name, cancellationToken).ConfigureAwait(false));
+            try
+            {
+                var tool = await _managementService.GetAsync(HttpContext.User, name, cancellationToken).ConfigureAwait(false);
+                if (tool == null)
+                    return NotFound();
+                else
+                    return Ok(await _adapterRichResultProvider.GetAdapterStatusAsync(tool.Name, cancellationToken).ConfigureAwait(false));
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Forbid();
+            }
         }
 
         // GET /tools/{name}/logs?instance=0
         [HttpGet("{name}/logs")]
         public async Task<IActionResult> GetToolLogs(string name, [FromQuery] int instance = 0, CancellationToken cancellationToken = default)
         {
-            var tool = await _managementService.GetAsync(HttpContext.User, name, cancellationToken).ConfigureAwait(false);
-            if (tool == null)
-                return NotFound();
-            else
-                return Ok(await _adapterRichResultProvider.GetAdapterLogsAsync(tool.Name, instance, cancellationToken).ConfigureAwait(false));
+            try
+            {
+                var tool = await _managementService.GetAsync(HttpContext.User, name, cancellationToken).ConfigureAwait(false);
+                if (tool == null)
+                    return NotFound();
+                else
+                    return Ok(await _adapterRichResultProvider.GetAdapterLogsAsync(tool.Name, instance, cancellationToken).ConfigureAwait(false));
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Forbid();
+            }
         }
 
         // PUT /tools/{name}
@@ -84,6 +105,10 @@ namespace Microsoft.McpGateway.Service.Controllers
             {
                 return BadRequest(ex.Message);
             }
+            catch (UnauthorizedAccessException)
+            {
+                return Forbid();
+            }
         }
 
         // DELETE /tools/{name}
@@ -98,6 +123,10 @@ namespace Microsoft.McpGateway.Service.Controllers
             catch (ArgumentException ex)
             {
                 return BadRequest(ex.Message);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Forbid();
             }
         }
 

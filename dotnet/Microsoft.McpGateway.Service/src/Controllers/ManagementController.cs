@@ -35,33 +35,54 @@ namespace Microsoft.McpGateway.Service.Controllers
         [HttpGet("{name}")]
         public async Task<IActionResult> GetAdapter(string name, CancellationToken cancellationToken)
         {
-            var adapter = await _managementService.GetAsync(HttpContext.User, name, cancellationToken).ConfigureAwait(false);
-            if (adapter == null)
-                return NotFound();
-            else
-                return Ok(adapter);
+            try
+            {
+                var adapter = await _managementService.GetAsync(HttpContext.User, name, cancellationToken).ConfigureAwait(false);
+                if (adapter == null)
+                    return NotFound();
+                else
+                    return Ok(adapter);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Forbid();
+            }
         }
 
         // GET /adapters/{name}/status
         [HttpGet("{name}/status")]
         public async Task<IActionResult> GetAdapterStatus(string name, CancellationToken cancellationToken)
         {
-            var adapter = await _managementService.GetAsync(HttpContext.User, name, cancellationToken).ConfigureAwait(false);
-            if (adapter == null)
-                return NotFound();
-            else
-                return Ok(await _adapterRichResultProvider.GetAdapterStatusAsync(adapter.Name, cancellationToken).ConfigureAwait(false));
+            try
+            {
+                var adapter = await _managementService.GetAsync(HttpContext.User, name, cancellationToken).ConfigureAwait(false);
+                if (adapter == null)
+                    return NotFound();
+                else
+                    return Ok(await _adapterRichResultProvider.GetAdapterStatusAsync(adapter.Name, cancellationToken).ConfigureAwait(false));
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Forbid();
+            }
         }
 
         // GET /adapters/{name}/logs?instance=0
         [HttpGet("{name}/logs")]
         public async Task<IActionResult> GetAdapterLogs(string name, [FromQuery] int instance = 0, CancellationToken cancellationToken = default)
         {
-            var adapter = await _managementService.GetAsync(HttpContext.User, name, cancellationToken).ConfigureAwait(false);
-            if (adapter == null)
-                return NotFound();
-            else
-                return Ok(await _adapterRichResultProvider.GetAdapterLogsAsync(adapter.Name, instance, cancellationToken).ConfigureAwait(false));
+            try
+            {
+                var adapter = await _managementService.GetAsync(HttpContext.User, name, cancellationToken).ConfigureAwait(false);
+                if (adapter == null)
+                    return NotFound();
+                else
+                    return Ok(await _adapterRichResultProvider.GetAdapterLogsAsync(adapter.Name, instance, cancellationToken).ConfigureAwait(false));
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Forbid();
+            }
         }
 
         // PUT /adapters/{name}
@@ -80,6 +101,10 @@ namespace Microsoft.McpGateway.Service.Controllers
             {
                 return BadRequest(ex.Message);
             }
+            catch (UnauthorizedAccessException)
+            {
+                return Forbid();
+            }
         }
 
         // DELETE /adapters/{name}
@@ -94,6 +119,10 @@ namespace Microsoft.McpGateway.Service.Controllers
             catch (ArgumentException ex)
             {
                 return BadRequest(ex.Message);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Forbid();
             }
         }
 
