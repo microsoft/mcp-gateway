@@ -91,69 +91,64 @@ namespace Microsoft.McpGateway.Service.Routing
                         if (!_initialFetchCompleted.Task.IsCompleted)
                             _initialFetchCompleted.TrySetResult(true);
 
-                        // Start the watcher to monitor pod events.
-                        var podsResponse = await kubeClient.CoreV1.ListNamespacedPodWithHttpMessagesAsync(
+                        _logger.LogInformation("Start Kubernetes watch for pod events");
+
+                        var watcherEnd = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        using var watcher = kubeClient.CoreV1.WatchListNamespacedPod(
                             namespaceParameter: AdapterNamespace,
                             labelSelector: AdapterLabel,
                             fieldSelector: RunningField,
                             resourceVersion: pods.Metadata?.ResourceVersion,
-                            watch: true,
-                            cancellationToken: cancellationToken).ConfigureAwait(false);
+                            onEvent: (eventType, pod) =>
+                            {
+                                _logger.LogInformation("Receive Kubernetes watch event type {eventType}, pod name {name}", eventType, pod.Metadata?.Name);
 
-                        _logger.LogInformation("Start Kubernetes watch for pod events - status code {statusCode}", podsResponse.Response.StatusCode);
+                                if (pod.Metadata?.Name == null)
+                                    return;
 
-                        var watcherEnd = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                        using var watcher = podsResponse!.Watch<V1Pod, V1PodList>(
-                        onEvent: (eventType, pod) =>
-                        {
-                            _logger.LogInformation("Receive Kubernetes watch event type {eventType}, pod name {name}", eventType, pod.Metadata?.Name);
+                                var adapterName = pod.Metadata.OwnerReferences.SingleOrDefault(o => o.Kind == "StatefulSet")?.Name;
+                                if (adapterName == null)
+                                    return;
 
-                            if (pod.Metadata?.Name == null)
-                                return;
-
-                            var adapterName = pod.Metadata.OwnerReferences.SingleOrDefault(o => o.Kind == "StatefulSet")?.Name;
-                            if (adapterName == null)
-                                return;
-
-                            _healthyPodsByStatefulSet.AddOrUpdate(
-                                adapterName,
-                                key => eventType == WatchEventType.Added && IsPodReady(pod) ? [pod.Metadata!.Name!] : [],
-                                (key, existingHealthyPods) =>
-                                {
-                                    var healthyPodsList = existingHealthyPods.ToList();
-                                    var podName = pod.Metadata!.Name!;
-
-                                    switch (eventType)
+                                _healthyPodsByStatefulSet.AddOrUpdate(
+                                    adapterName,
+                                    key => eventType == WatchEventType.Added && IsPodReady(pod) ? [pod.Metadata!.Name!] : [],
+                                    (key, existingHealthyPods) =>
                                     {
-                                        case WatchEventType.Added:
-                                        case WatchEventType.Modified:
-                                            if (IsPodReady(pod) && !healthyPodsList.Contains(podName))
-                                                healthyPodsList.Add(podName);
-                                            else if (!IsPodReady(pod))
+                                        var healthyPodsList = existingHealthyPods.ToList();
+                                        var podName = pod.Metadata!.Name!;
+
+                                        switch (eventType)
+                                        {
+                                            case WatchEventType.Added:
+                                            case WatchEventType.Modified:
+                                                if (IsPodReady(pod) && !healthyPodsList.Contains(podName))
+                                                    healthyPodsList.Add(podName);
+                                                else if (!IsPodReady(pod))
+                                                    healthyPodsList.Remove(podName);
+                                                break;
+
+                                            case WatchEventType.Deleted:
                                                 healthyPodsList.Remove(podName);
-                                            break;
+                                                break;
+                                        }
 
-                                        case WatchEventType.Deleted:
-                                            healthyPodsList.Remove(podName);
-                                            break;
-                                    }
+                                        return [.. healthyPodsList];
+                                    });
 
-                                    return [.. healthyPodsList];
-                                });
-
-                            _logger.LogInformation("Kubernetes watch event type {eventType}, pod name {name}, update completes", eventType, pod.Metadata?.Name);
-                        },
-                        onError: ex =>
-                        {
-                            Console.WriteLine($"Watch error: {ex}");
-                            _logger.LogError(ex, "Kubernetes watch encountered an error.");
-                            watcherEnd.TrySetResult(true);
-                        },
-                        onClosed: () =>
-                        {
-                            _logger.LogWarning("Kubernetes watch is closed.");
-                            watcherEnd.TrySetResult(true);
-                        });
+                                _logger.LogInformation("Kubernetes watch event type {eventType}, pod name {name}, update completes", eventType, pod.Metadata?.Name);
+                            },
+                            onError: ex =>
+                            {
+                                Console.WriteLine($"Watch error: {ex}");
+                                _logger.LogError(ex, "Kubernetes watch encountered an error.");
+                                watcherEnd.TrySetResult(true);
+                            },
+                            onClosed: () =>
+                            {
+                                _logger.LogWarning("Kubernetes watch is closed.");
+                                watcherEnd.TrySetResult(true);
+                            });
 
                         await watcherEnd.Task.ConfigureAwait(false);
                     }
