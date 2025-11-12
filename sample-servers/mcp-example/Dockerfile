@@ -6,19 +6,22 @@ RUN adduser --disabled-password --gecos '' --uid 1100 mcpuser
 # Set working directory
 WORKDIR /app
 
+# Configure Python runtime defaults to avoid extraneous files and warnings
+ENV PYTHONDONTWRITEBYTECODE=1 \
+	PYTHONUNBUFFERED=1 \
+	PIP_DISABLE_PIP_VERSION_CHECK=1 \
+	PIP_ROOT_USER_ACTION=ignore
+
 # Install dependencies
 COPY requirements.txt .
-RUN pip install --upgrade pip --root-user-action=ignore
-RUN pip install --no-cache-dir -r requirements.txt --root-user-action=ignore
+RUN python -m pip install --upgrade pip \
+	&& python -m pip install --no-cache-dir -r requirements.txt
 
 # Copy source
-COPY . .
-
-# Change ownership to non-root user
-RUN chown -R mcpuser:mcpuser /app
+COPY --chown=mcpuser:mcpuser . .
 
 # Switch to non-root user
-USER 1100
+USER mcpuser
 
 # Expose HTTP port
 EXPOSE 8000
