@@ -39,9 +39,7 @@ jobs:
         file: ./dotnet/Microsoft.McpGateway.Service/Dockerfile
         platforms: linux/amd64,linux/arm64
         push: true
-        tags: |
-          ghcr.io/${{ github.repository_owner }}/mcp-gateway:latest
-          ghcr.io/${{ github.repository_owner }}/mcp-gateway:${{ github.sha }}
+        tags: ghcr.io/${{ github.repository_owner }}/mcp-gateway:latest
 
     - name: Build and push tool-gateway multi-arch image
       uses: docker/build-push-action@v5
@@ -50,6 +48,4 @@ jobs:
         file: ./dotnet/Microsoft.McpGateway.Tools/Dockerfile
         platforms: linux/amd64,linux/arm64
         push: true
-        tags: |
-          ghcr.io/${{ github.repository_owner }}/tool-gateway:latest
-          ghcr.io/${{ github.repository_owner }}/tool-gateway:${{ github.sha }}
+        tags: ghcr.io/${{ github.repository_owner }}/tool-gateway:latest

@@ -23,12 +23,12 @@ RUN dotnet publish Microsoft.McpGateway.Tools.csproj -c Release -o /app/publish 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
 
-# Copy published application from build stage
-COPY --from=build /app/publish .
-
 # Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser && \
-    chown -R appuser:appuser /app
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+# Copy published application from build stage with proper ownership
+COPY --from=build --chown=appuser:appuser /app/publish .
+
 USER appuser
 
 # Expose port
