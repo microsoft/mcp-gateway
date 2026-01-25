@@ -23,16 +23,11 @@ RUN dotnet publish Microsoft.McpGateway.Tools.csproj -c Release -o /app/publish 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
 
-# Create non-root user
-RUN groupadd -r -g 1000 appuser && useradd -r -u 1000 -g appuser appuser
-
-# Copy published application from build stage with proper ownership
-COPY --from=build --chown=appuser:appuser /app/publish .
-
-USER appuser
+# Copy published application from build stage
+COPY --from=build /app/publish .
 
 # Expose port
-EXPOSE 8080
+EXPOSE 8000
 
 # Set entrypoint
 ENTRYPOINT ["dotnet", "Microsoft.McpGateway.Tools.dll"]
