@@ -26,5 +26,8 @@ USER mcpuser
 # Expose HTTP port
 EXPOSE 8000
 
-# Start FastAPI via Uvicorn on HTTP
-CMD ["fastmcp", "run", "src/main.py:app", "--transport", "streamable-http", "--port", "8000", "--host", "0.0.0.0"]
+# Default port (can be overridden by PORT env var or startupCommand)
+ENV PORT=8000
+
+# Start FastAPI via Uvicorn on HTTP - use CMD so it can be overridden by startupCommand
+CMD fastmcp run src/main.py:app --transport streamable-http --port ${PORT:-8000} --host 0.0.0.0

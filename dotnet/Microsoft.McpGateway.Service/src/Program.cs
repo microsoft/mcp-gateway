@@ -11,6 +11,7 @@ using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Service;
 using Microsoft.McpGateway.Management.Store;
+using Microsoft.McpGateway.Service.AppService;
 using Microsoft.McpGateway.Service.Authentication;
 using Microsoft.McpGateway.Service.Routing;
 using Microsoft.McpGateway.Service.Session;
@@ -21,13 +22,28 @@ using System.Text.Json.Serialization;
 var builder = WebApplication.CreateBuilder(args);
 var credential = new DefaultAzureCredential();
 
+// Detect if running in Azure App Service
+var isAppService = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WEBSITE_SITE_NAME"));
+
 builder.Services.AddApplicationInsightsTelemetry();
 builder.Services.AddLogging();
 
-builder.Services.AddSingleton<IKubernetesClientFactory, LocalKubernetesClientFactory>();
+// Session and routing services (shared between K8s and App Service)
 builder.Services.AddSingleton<IAdapterSessionStore, DistributedMemorySessionStore>();
-builder.Services.AddSingleton<IServiceNodeInfoProvider, AdapterKubernetesNodeInfoProvider>();
 builder.Services.AddSingleton<ISessionRoutingHandler, AdapterSessionRoutingHandler>();
+
+if (isAppService)
+{
+    // App Service mode: use sitecontainers via ARM API
+    builder.Services.AddSingleton<SiteContainerPortAllocator>();
+    builder.Services.AddSingleton<IServiceNodeInfoProvider, AppServiceNodeInfoProvider>();
+}
+else
+{
+    // Kubernetes mode (default)
+    builder.Services.AddSingleton<IKubernetesClientFactory, LocalKubernetesClientFactory>();
+    builder.Services.AddSingleton<IServiceNodeInfoProvider, AdapterKubernetesNodeInfoProvider>();
+}
 
 if (builder.Environment.IsDevelopment())
 {
@@ -104,17 +120,34 @@ else
     });
 }
 
-builder.Services.AddSingleton<IKubeClientWrapper>(c =>
+if (isAppService)
 {
-    var kubeClientFactory = c.GetRequiredService<IKubernetesClientFactory>();
-    return new KubeClient(kubeClientFactory, "adapter");
-});
-builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
-builder.Services.AddSingleton<IAdapterDeploymentManager>(c =>
+    // App Service mode: use ARM API for deployment
+    builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
+    builder.Services.AddSingleton<IAdapterDeploymentManager>(c =>
+    {
+        var config = builder.Configuration.GetSection("ContainerRegistrySettings");
+        return new AppServiceDeploymentManager(
+            config["Endpoint"]!,
+            c.GetRequiredService<SiteContainerPortAllocator>(),
+            c.GetRequiredService<ILogger<AppServiceDeploymentManager>>());
+    });
+}
+else
 {
-    var config = builder.Configuration.GetSection("ContainerRegistrySettings");
-    return new KubernetesAdapterDeploymentManager(config["Endpoint"]!, c.GetRequiredService<IKubeClientWrapper>(), c.GetRequiredService<ILogger<KubernetesAdapterDeploymentManager>>());
-});
+    // Kubernetes mode
+    builder.Services.AddSingleton<IKubeClientWrapper>(c =>
+    {
+        var kubeClientFactory = c.GetRequiredService<IKubernetesClientFactory>();
+        return new KubeClient(kubeClientFactory, "adapter");
+    });
+    builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
+    builder.Services.AddSingleton<IAdapterDeploymentManager>(c =>
+    {
+        var config = builder.Configuration.GetSection("ContainerRegistrySettings");
+        return new KubernetesAdapterDeploymentManager(config["Endpoint"]!, c.GetRequiredService<IKubeClientWrapper>(), c.GetRequiredService<ILogger<KubernetesAdapterDeploymentManager>>());
+    });
+}
 builder.Services.AddSingleton<IAdapterManagementService, AdapterManagementService>();
 builder.Services.AddSingleton<IToolManagementService, ToolManagementService>();
 builder.Services.AddSingleton<IAdapterRichResultProvider, AdapterRichResultProvider>();
