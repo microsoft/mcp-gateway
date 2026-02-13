@@ -76,7 +76,6 @@ param(
     [switch]$EnablePrivateEndpoints,
 
     [Parameter(Mandatory = $false)]
-    [Parameter(Mandatory = $false)]
     [switch]$EnableFreeTier,
 
     [Parameter(Mandatory = $false)]
