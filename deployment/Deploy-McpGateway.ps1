@@ -37,6 +37,9 @@
 .PARAMETER AcrSku
     ACR SKU name. Defaults to 'Standard'. Use 'Basic' for free-tier testing.
 
+.PARAMETER CloudEnvironment
+    Azure cloud environment. Use 'AzureUSGovernment' for GCC High deployments. Defaults to 'AzureCloud'.
+
 .EXAMPLE
     .\Deploy-McpGateway.ps1 -ResourceGroupName "rg-mcpgateway-dev" -ClientId "00000000-0000-0000-0000-000000000000"
 
@@ -73,6 +76,7 @@ param(
     [switch]$EnablePrivateEndpoints,
 
     [Parameter(Mandatory = $false)]
+    [Parameter(Mandatory = $false)]
     [switch]$EnableFreeTier,
 
     [Parameter(Mandatory = $false)]
@@ -84,7 +88,11 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateSet('Basic', 'Standard', 'Premium')]
-    [string]$AcrSku = "Standard"
+    [string]$AcrSku = "Standard",
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('AzureCloud', 'AzureUSGovernment')]
+    [string]$CloudEnvironment = "AzureCloud"
 )
 
 # Error handling
@@ -137,6 +145,13 @@ function Test-Prerequisites {
         Write-ColorOutput "✗ Not logged in to Azure CLI" -Type Error
         throw "Please run 'az login' first"
     }
+
+    # Set Azure cloud environment
+    if ($CloudEnvironment -ne 'AzureCloud') {
+        Write-ColorOutput "Setting Azure cloud environment to: $CloudEnvironment" -Type Info
+        az cloud set --name $CloudEnvironment
+        Write-ColorOutput "✓ Cloud environment set to $CloudEnvironment" -Type Success
+    }
 }
 
 # Main deployment function
@@ -144,6 +159,14 @@ function Start-Deployment {
     Write-ColorOutput "`n========================================" -Type Info
     Write-ColorOutput "MCP Gateway Deployment" -Type Info
     Write-ColorOutput "========================================`n" -Type Info
+
+    # Validate location for the target cloud environment
+    $govRegions = @('usgovvirginia', 'usgovtexas', 'usgovarizona', 'usdodeast', 'usdodcentral')
+    if ($CloudEnvironment -eq 'AzureUSGovernment' -and $Location -notin $govRegions) {
+        Write-ColorOutput "Location '$Location' is not a valid Azure Government region." -Type Error
+        Write-ColorOutput "Valid regions: $($govRegions -join ', ')" -Type Error
+        throw "Please specify a valid Azure Government region using the -Location parameter."
+    }
 
     # Check prerequisites
     Test-Prerequisites
@@ -259,6 +282,10 @@ function Deploy-KubernetesResources {
     $identifier = $Outputs.resourceLabel.value
     $tenantId = $Outputs.tenantId.value
     $region = $Outputs.location.value
+    $azureAdInstance = $Outputs.azureAdInstance.value
+    $cosmosEndpoint = $Outputs.cosmosDbEndpoint.value
+    $acrLoginServer = $Outputs.acrLoginServer.value
+    $publicFqdn = $Outputs.publicIpFqdn.value
 
     # Download the Kubernetes template
     $templateUrl = "https://raw.githubusercontent.com/microsoft/mcp-gateway/refs/heads/main/deployment/k8s/cloud-deployment-template.yml"
@@ -291,6 +318,10 @@ function Deploy-KubernetesResources {
         '${APPINSIGHTS_CONNECTION_STRING}' = $appInsightsConnectionString
         '${IDENTIFIER}' = $identifier
         '${REGION}' = $region
+        '${AZURE_AD_INSTANCE}' = $azureAdInstance
+        '${COSMOS_ENDPOINT}' = $cosmosEndpoint
+        '${ACR_LOGIN_SERVER}' = $acrLoginServer
+        '${PUBLIC_ORIGIN}' = "http://$publicFqdn/"
     }
 
     foreach ($key in $replacements.Keys) {
