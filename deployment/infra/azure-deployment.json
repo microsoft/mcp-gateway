@@ -37,13 +37,47 @@
       "metadata": {
         "description": "Enable private endpoints for Azure resources (ACR, Cosmos DB). When enabled, resources will only be accessible within the VNet."
       }
+    },
+    "enableFreeTier": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable Cosmos DB free tier (one free-tier account per subscription)."
+      }
+    },
+    "aksVmSize": {
+      "type": "string",
+      "defaultValue": "Standard_D4ds_v5",
+      "metadata": {
+        "description": "AKS node VM size. Use a smaller size like Standard_B2s for testing."
+      }
+    },
+    "aksNodeCount": {
+      "type": "int",
+      "defaultValue": 2,
+      "metadata": {
+        "description": "Number of AKS nodes. Use 1 for testing."
+      }
+    },
+    "acrSku": {
+      "type": "string",
+      "defaultValue": "Standard",
+      "allowedValues": [
+        "Basic",
+        "Standard",
+        "Premium"
+      ],
+      "metadata": {
+        "description": "ACR SKU name. Use Basic for testing to reduce cost."
+      }
     }
   },
   "variables": {
     "resourceLabelLower": "[toLower(parameters('resourceLabel'))]",
+    "resourceLabelAlphanumeric": "[replace(replace(variables('resourceLabelLower'), '-', ''), '_', '')]",
     "aksNameBase": "[format('mg-aks-{0}', variables('resourceLabelLower'))]",
     "aksName": "[substring(variables('aksNameBase'), 0, min(length(variables('aksNameBase')), 63))]",
-    "acrNameBase": "[format('mgreg{0}', variables('resourceLabelLower'))]",
+    "acrNameBase": "[format('mgreg{0}', variables('resourceLabelAlphanumeric'))]",
     "acrName": "[substring(variables('acrNameBase'), 0, min(length(variables('acrNameBase')), 50))]",
     "cosmosDbAccountNameBase": "[format('mg-storage-{0}', variables('resourceLabelLower'))]",
     "cosmosDbAccountName": "[substring(variables('cosmosDbAccountNameBase'), 0, min(length(variables('cosmosDbAccountNameBase')), 44))]",
@@ -125,7 +159,7 @@
       "name": "[variables('acrName')]",
       "location": "[parameters('location')]",
       "sku": {
-        "name": "Standard"
+        "name": "[parameters('acrSku')]"
       },
       "properties": {
         "policies": {
@@ -153,8 +187,8 @@
         "agentPoolProfiles": [
           {
             "name": "nodepool1",
-            "count": 2,
-            "vmSize": "Standard_D4ds_v5",
+            "count": "[parameters('aksNodeCount')]",
+            "vmSize": "[parameters('aksVmSize')]",
             "osType": "Linux",
             "mode": "System",
             "osSKU": "Ubuntu",
@@ -440,7 +474,7 @@
         "consistencyPolicy": {
           "defaultConsistencyLevel": "Session"
         },
-        "enableFreeTier": false,
+        "enableFreeTier": "[parameters('enableFreeTier')]",
         "publicNetworkAccess": "[if(parameters('enablePrivateEndpoints'), 'Disabled', 'Enabled')]"
       }
     },

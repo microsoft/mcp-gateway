@@ -25,11 +25,26 @@
 .PARAMETER EnablePrivateEndpoints
     Enable private endpoints for Azure resources (ACR, Cosmos DB). When enabled, resources will only be accessible within the VNet.
 
+.PARAMETER EnableFreeTier
+    Enable Cosmos DB free tier to reduce costs for testing. Only one free-tier account is allowed per subscription.
+
+.PARAMETER AksVmSize
+    AKS node VM size. Defaults to 'Standard_D4ds_v5'. Use 'Standard_B2s' for free-tier testing.
+
+.PARAMETER AksNodeCount
+    Number of AKS nodes. Defaults to 2. Use 1 for free-tier testing.
+
+.PARAMETER AcrSku
+    ACR SKU name. Defaults to 'Standard'. Use 'Basic' for free-tier testing.
+
 .EXAMPLE
     .\Deploy-McpGateway.ps1 -ResourceGroupName "rg-mcpgateway-dev" -ClientId "00000000-0000-0000-0000-000000000000"
 
 .EXAMPLE
     .\Deploy-McpGateway.ps1 -ResourceGroupName "rg-mcpgateway-prod" -ClientId "00000000-0000-0000-0000-000000000000" -ResourceLabel "mcpprod" -Location "westus2" -EnablePrivateEndpoints
+
+.EXAMPLE
+    .\Deploy-McpGateway.ps1 -ResourceGroupName "rg-mcp-gateway" -ClientId "00000000-0000-0000-0000-000000000000" -EnableFreeTier -AksVmSize "Standard_B2s" -AksNodeCount 1 -AcrSku "Basic"
 
 .NOTES
     Prerequisites:
@@ -49,14 +64,27 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateLength(3, 30)]
-    [ValidatePattern('^[a-z0-9]+$')]
     [string]$ResourceLabel,
 
     [Parameter(Mandatory = $false)]
     [string]$Location = "westus3",
 
     [Parameter(Mandatory = $false)]
-    [switch]$EnablePrivateEndpoints
+    [switch]$EnablePrivateEndpoints,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$EnableFreeTier,
+
+    [Parameter(Mandatory = $false)]
+    [string]$AksVmSize = "Standard_D4ds_v5",
+
+    [Parameter(Mandatory = $false)]
+    [ValidateRange(1, 10)]
+    [int]$AksNodeCount = 2,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('Basic', 'Standard', 'Premium')]
+    [string]$AcrSku = "Standard"
 )
 
 # Error handling
@@ -152,6 +180,10 @@ function Start-Deployment {
     $deploymentParams += "location=$Location"
     $deploymentParams += "enablePrivateEndpoints=$($EnablePrivateEndpoints.IsPresent.ToString().ToLower())"
     $deploymentParams += "enableKubernetesDeploymentScript=false"
+    $deploymentParams += "enableFreeTier=$($EnableFreeTier.IsPresent.ToString().ToLower())"
+    $deploymentParams += "aksVmSize=$AksVmSize"
+    $deploymentParams += "aksNodeCount=$AksNodeCount"
+    $deploymentParams += "acrSku=$AcrSku"
 
     if ($ResourceLabel) {
         $deploymentParams += "resourceLabel=$ResourceLabel"

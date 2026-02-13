@@ -16,12 +16,27 @@ param enablePrivateEndpoints bool = false
 @description('Enable Kubernetes deployment script. Set to false when using external PowerShell script for deployment.')
 param enableKubernetesDeploymentScript bool = true
 
+@description('Enable Cosmos DB free tier (one free-tier account per subscription).')
+param enableFreeTier bool = false
+
+@description('AKS node VM size. Use a smaller size like Standard_B2s for testing.')
+param aksVmSize string = 'Standard_D4ds_v5'
+
+@description('Number of AKS nodes. Use 1 for testing.')
+param aksNodeCount int = 2
+
+@description('ACR SKU name. Use Basic for testing to reduce cost.')
+@allowed(['Basic', 'Standard', 'Premium'])
+param acrSku string = 'Standard'
+
 var resourceLabelLower = toLower(resourceLabel)
+// ACR names must be alphanumeric only — strip hyphens and underscores
+var resourceLabelAlphanumeric = replace(replace(resourceLabelLower, '-', ''), '_', '')
 
 var aksNameBase = 'mg-aks-${resourceLabelLower}'
 var aksName = substring(aksNameBase, 0, min(length(aksNameBase), 63))
 
-var acrNameBase = 'mgreg${resourceLabelLower}'
+var acrNameBase = 'mgreg${resourceLabelAlphanumeric}'
 var acrName = substring(acrNameBase, 0, min(length(acrNameBase), 50))
 
 var cosmosDbAccountNameBase = 'mg-storage-${resourceLabelLower}'
@@ -108,7 +123,7 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-01-01-preview' = {
   name: acrName
   location: location
   sku: {
-    name: 'Standard'
+    name: acrSku
   }
   properties: {
     policies: {
@@ -136,8 +151,8 @@ resource aks 'Microsoft.ContainerService/managedClusters@2023-04-01' = {
     agentPoolProfiles: [
       {
         name: 'nodepool1'
-        count: 2
-        vmSize: 'Standard_D4ds_v5'
+        count: aksNodeCount
+        vmSize: aksVmSize
         osType: 'Linux'
         mode: 'System'
         osSKU: 'Ubuntu'
@@ -400,7 +415,7 @@ resource cosmosDb 'Microsoft.DocumentDB/databaseAccounts@2023-04-15' = {
     consistencyPolicy: {
       defaultConsistencyLevel: 'Session'
     }
-    enableFreeTier: false
+    enableFreeTier: enableFreeTier
     publicNetworkAccess: enablePrivateEndpoints ? 'Disabled' : 'Enabled'
   }
 }
