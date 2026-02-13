@@ -56,7 +56,11 @@ param(
     [string]$Location = "westus3",
 
     [Parameter(Mandatory = $false)]
-    [switch]$EnablePrivateEndpoints
+    [switch]$EnablePrivateEndpoints,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('AzureCloud', 'AzureUSGovernment')]
+    [string]$CloudEnvironment = "AzureCloud"
 )
 
 # Error handling
@@ -108,6 +112,13 @@ function Test-Prerequisites {
     catch {
         Write-ColorOutput "✗ Not logged in to Azure CLI" -Type Error
         throw "Please run 'az login' first"
+    }
+
+    # Set Azure cloud environment
+    if ($CloudEnvironment -ne 'AzureCloud') {
+        Write-ColorOutput "Setting Azure cloud environment to: $CloudEnvironment" -Type Info
+        az cloud set --name $CloudEnvironment
+        Write-ColorOutput "✓ Cloud environment set to $CloudEnvironment" -Type Success
     }
 }
 
@@ -227,6 +238,10 @@ function Deploy-KubernetesResources {
     $identifier = $Outputs.resourceLabel.value
     $tenantId = $Outputs.tenantId.value
     $region = $Outputs.location.value
+    $azureAdInstance = $Outputs.azureAdInstance.value
+    $cosmosEndpoint = $Outputs.cosmosDbEndpoint.value
+    $acrLoginServer = $Outputs.acrLoginServer.value
+    $publicFqdn = $Outputs.publicIpFqdn.value
 
     # Download the Kubernetes template
     $templateUrl = "https://raw.githubusercontent.com/microsoft/mcp-gateway/refs/heads/main/deployment/k8s/cloud-deployment-template.yml"
@@ -259,6 +274,10 @@ function Deploy-KubernetesResources {
         '${APPINSIGHTS_CONNECTION_STRING}' = $appInsightsConnectionString
         '${IDENTIFIER}' = $identifier
         '${REGION}' = $region
+        '${AZURE_AD_INSTANCE}' = $azureAdInstance
+        '${COSMOS_ENDPOINT}' = $cosmosEndpoint
+        '${ACR_LOGIN_SERVER}' = $acrLoginServer
+        '${PUBLIC_ORIGIN}' = "http://$publicFqdn/"
     }
 
     foreach ($key in $replacements.Keys) {

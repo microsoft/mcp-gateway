@@ -64,7 +64,7 @@ else
         options.ResourceMetadata = new()
         {
             Resource = new Uri(builder.Configuration.GetValue<string>("PublicOrigin")!),
-            AuthorizationServers = { new Uri($"https://login.microsoftonline.com/{azureAdConfig["TenantId"]}/v2.0") },
+            AuthorizationServers = { new Uri($"{azureAdConfig["Instance"]}{azureAdConfig["TenantId"]}/v2.0") },
             ScopesSupported = [$"api://{azureAdConfig["ClientId"]}/.default"]
         };
     })

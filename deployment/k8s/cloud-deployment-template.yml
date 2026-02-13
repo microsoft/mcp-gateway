@@ -108,19 +108,21 @@ metadata:
   name: app-config
   namespace: adapter
 data:
-  AzureAd__Instance: "https://login.microsoftonline.com/"
+  AzureAd__Instance: "${AZURE_AD_INSTANCE}"
   AzureAd__TenantId: "${TENANT_ID}"
   AzureAd__ClientId: "${CLIENT_ID}"
   AzureAd__Audience: "${CLIENT_ID}"
 
-  CosmosSettings__AccountEndpoint: "https://mg-storage-${IDENTIFIER}.documents.azure.com:443/"
+  AZURE_AUTHORITY_HOST: "${AZURE_AD_INSTANCE}"
+
+  CosmosSettings__AccountEndpoint: "${COSMOS_ENDPOINT}"
   CosmosSettings__DatabaseName: "McpGatewayDb"
 
   ApplicationInsights__ConnectionString: "${APPINSIGHTS_CONNECTION_STRING}"
 
-  ContainerRegistrySettings__Endpoint: "mgreg${IDENTIFIER}.azurecr.io"
+  ContainerRegistrySettings__Endpoint: "${ACR_LOGIN_SERVER}"
 
-  PublicOrigin: "http://${IDENTIFIER}.${REGION}.cloudapp.azure.com/"
+  PublicOrigin: "${PUBLIC_ORIGIN}"
 ---
 apiVersion: apps/v1
 kind: StatefulSet

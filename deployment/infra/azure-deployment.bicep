@@ -59,6 +59,10 @@ var federatedCredName = substring(federatedCredNameBase, 0, min(length(federated
 var federatedCredWorkloadNameBase = '${federatedCredName}-workload'
 var federatedCredWorkloadName = substring(federatedCredWorkloadNameBase, 0, min(length(federatedCredWorkloadNameBase), 128))
 
+// Cloud-aware endpoint variables derived from the deployment environment
+var azureAdInstance = environment().authentication.loginEndpoint
+var cosmosPrivateDnsZoneName = 'privatelink.documents.${environment().suffixes.cosmosdbDns}'
+
 // VNet
 resource vnet 'Microsoft.Network/virtualNetworks@2022-07-01' = {
   name: vnetName
@@ -472,7 +476,7 @@ resource cosmosDbRoleAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAs
 
 // Private DNS Zone for Cosmos DB
 resource cosmosPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (enablePrivateEndpoints) {
-  name: 'privatelink.documents.azure.com'
+  name: cosmosPrivateDnsZoneName
   location: 'global'
 }
 
@@ -559,6 +563,10 @@ resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01'
       sed -i "s|\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g" cloud-deployment-template.yml
       sed -i "s|\${IDENTIFIER}|$IDENTIFIER|g" cloud-deployment-template.yml
       sed -i "s|\${REGION}|$REGION|g" cloud-deployment-template.yml
+      sed -i "s|\${AZURE_AD_INSTANCE}|$AZURE_AD_INSTANCE|g" cloud-deployment-template.yml
+      sed -i "s|\${COSMOS_ENDPOINT}|$COSMOS_ENDPOINT|g" cloud-deployment-template.yml
+      sed -i "s|\${ACR_LOGIN_SERVER}|$ACR_LOGIN_SERVER|g" cloud-deployment-template.yml
+      sed -i "s|\${PUBLIC_ORIGIN}|$PUBLIC_ORIGIN|g" cloud-deployment-template.yml
 
       az aks command invoke -g $ResourceGroupName -n mg-aks-"$ResourceGroupName" --command "kubectl apply -f cloud-deployment-template.yml" --file cloud-deployment-template.yml
     '''
@@ -598,6 +606,22 @@ resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01'
         name: 'TENANT_ID'
         value: tenant().tenantId
       }
+      {
+        name: 'AZURE_AD_INSTANCE'
+        value: azureAdInstance
+      }
+      {
+        name: 'COSMOS_ENDPOINT'
+        value: cosmosDb.properties.documentEndpoint
+      }
+      {
+        name: 'ACR_LOGIN_SERVER'
+        value: acr.properties.loginServer
+      }
+      {
+        name: 'PUBLIC_ORIGIN'
+        value: 'http://${appGwPublicIp.properties.dnsSettings.fqdn}/'
+      }
     ]
   }
   dependsOn: [aks]
@@ -615,3 +639,6 @@ output resourceLabel string = resourceLabel
 output tenantId string = tenant().tenantId
 output location string = location
 output publicIpFqdn string = appGwPublicIp.properties.dnsSettings.fqdn
+output azureAdInstance string = azureAdInstance
+output cosmosDbEndpoint string = cosmosDb.properties.documentEndpoint
+output acrLoginServer string = acr.properties.loginServer

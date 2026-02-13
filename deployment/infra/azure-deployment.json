@@ -67,7 +67,9 @@
     "federatedCredNameBase": "[format('mg-sa-federation-{0}', variables('resourceLabelLower'))]",
     "federatedCredName": "[substring(variables('federatedCredNameBase'), 0, min(length(variables('federatedCredNameBase')), 128))]",
     "federatedCredWorkloadNameBase": "[format('{0}-workload', variables('federatedCredName'))]",
-    "federatedCredWorkloadName": "[substring(variables('federatedCredWorkloadNameBase'), 0, min(length(variables('federatedCredWorkloadNameBase')), 128))]"
+    "federatedCredWorkloadName": "[substring(variables('federatedCredWorkloadNameBase'), 0, min(length(variables('federatedCredWorkloadNameBase')), 128))]",
+    "azureAdInstance": "[environment().authentication.loginEndpoint]",
+    "cosmosPrivateDnsZoneName": "[format('privatelink.documents.{0}', environment().suffixes.cosmosdbDns)]"
   },
   "resources": [
     {
@@ -532,14 +534,14 @@
       "condition": "[parameters('enablePrivateEndpoints')]",
       "type": "Microsoft.Network/privateDnsZones",
       "apiVersion": "2020-06-01",
-      "name": "privatelink.documents.azure.com",
+      "name": "[variables('cosmosPrivateDnsZoneName')]",
       "location": "global"
     },
     {
       "condition": "[parameters('enablePrivateEndpoints')]",
       "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
       "apiVersion": "2020-06-01",
-      "name": "[format('{0}/{1}', 'privatelink.documents.azure.com', format('{0}-cosmos-link', variables('vnetName')))]",
+      "name": "[format('{0}/{1}', variables('cosmosPrivateDnsZoneName'), format('{0}-cosmos-link', variables('vnetName')))]",
       "location": "global",
       "properties": {
         "registrationEnabled": false,
@@ -548,7 +550,7 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.documents.azure.com')]",
+        "[resourceId('Microsoft.Network/privateDnsZones', variables('cosmosPrivateDnsZoneName'))]",
         "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
       ]
     },
@@ -589,13 +591,13 @@
           {
             "name": "privatelink-documents-azure-com",
             "properties": {
-              "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.documents.azure.com')]"
+              "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('cosmosPrivateDnsZoneName'))]"
             }
           }
         ]
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.documents.azure.com')]",
+        "[resourceId('Microsoft.Network/privateDnsZones', variables('cosmosPrivateDnsZoneName'))]",
         "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}', variables('cosmosDbAccountName')))]"
       ]
     },
@@ -625,7 +627,7 @@
         "azCliVersion": "2.60.0",
         "timeout": "PT30M",
         "retentionInterval": "P1D",
-        "scriptContent": "      sed -i \"s|\\${AZURE_CLIENT_ID}|$AZURE_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${WORKLOAD_CLIENT_ID}|$WORKLOAD_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${TENANT_ID}|$TENANT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${CLIENT_ID}|$CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${IDENTIFIER}|$IDENTIFIER|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${REGION}|$REGION|g\" cloud-deployment-template.yml\r\n\r\n      az aks command invoke -g $ResourceGroupName -n mg-aks-\"$ResourceGroupName\" --command \"kubectl apply -f cloud-deployment-template.yml\" --file cloud-deployment-template.yml\r\n    ",
+        "scriptContent": "      sed -i \"s|\\${AZURE_CLIENT_ID}|$AZURE_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${WORKLOAD_CLIENT_ID}|$WORKLOAD_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${TENANT_ID}|$TENANT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${CLIENT_ID}|$CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${IDENTIFIER}|$IDENTIFIER|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${REGION}|$REGION|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${AZURE_AD_INSTANCE}|$AZURE_AD_INSTANCE|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${COSMOS_ENDPOINT}|$COSMOS_ENDPOINT|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${ACR_LOGIN_SERVER}|$ACR_LOGIN_SERVER|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${PUBLIC_ORIGIN}|$PUBLIC_ORIGIN|g\" cloud-deployment-template.yml\r\n\r\n      az aks command invoke -g $ResourceGroupName -n mg-aks-\"$ResourceGroupName\" --command \"kubectl apply -f cloud-deployment-template.yml\" --file cloud-deployment-template.yml\r\n    ",
         "supportingScriptUris": [
           "https://raw.githubusercontent.com/microsoft/mcp-gateway/refs/heads/main/deployment/k8s/cloud-deployment-template.yml"
         ],
@@ -661,16 +663,93 @@
           {
             "name": "TENANT_ID",
             "value": "[tenant().tenantId]"
+          },
+          {
+            "name": "AZURE_AD_INSTANCE",
+            "value": "[variables('azureAdInstance')]"
+          },
+          {
+            "name": "COSMOS_ENDPOINT",
+            "value": "[reference(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDbAccountName')), '2023-04-15').documentEndpoint]"
+          },
+          {
+            "name": "ACR_LOGIN_SERVER",
+            "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), '2023-01-01-preview').loginServer]"
+          },
+          {
+            "name": "PUBLIC_ORIGIN",
+            "value": "[format('http://{0}/', reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName')), '2022-05-01').dnsSettings.fqdn)]"
           }
         ]
       },
       "dependsOn": [
         "[resourceId('Microsoft.ContainerService/managedClusters', variables('aksName'))]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', variables('acrName'))]",
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDbAccountName'))]",
+        "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))]",
         "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName'))]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-admin', variables('userAssignedIdentityName')))]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-workload', variables('userAssignedIdentityName')))]"
       ]
     }
-  ]
+  ],
+  "outputs": {
+    "aksName": {
+      "type": "string",
+      "value": "[variables('aksName')]"
+    },
+    "acrName": {
+      "type": "string",
+      "value": "[variables('acrName')]"
+    },
+    "cosmosDbAccountName": {
+      "type": "string",
+      "value": "[variables('cosmosDbAccountName')]"
+    },
+    "userAssignedIdentityClientId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), '2023-01-31').clientId]"
+    },
+    "workloadIdentityClientId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-workload', variables('userAssignedIdentityName'))), '2023-01-31').clientId]"
+    },
+    "appInsightsConnectionString": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName')), '2020-02-02').ConnectionString]"
+    },
+    "resourceGroupName": {
+      "type": "string",
+      "value": "[resourceGroup().name]"
+    },
+    "resourceLabel": {
+      "type": "string",
+      "value": "[parameters('resourceLabel')]"
+    },
+    "tenantId": {
+      "type": "string",
+      "value": "[tenant().tenantId]"
+    },
+    "location": {
+      "type": "string",
+      "value": "[parameters('location')]"
+    },
+    "publicIpFqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName')), '2022-05-01').dnsSettings.fqdn]"
+    },
+    "azureAdInstance": {
+      "type": "string",
+      "value": "[variables('azureAdInstance')]"
+    },
+    "cosmosDbEndpoint": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosDbAccountName')), '2023-04-15').documentEndpoint]"
+    },
+    "acrLoginServer": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), '2023-01-01-preview').loginServer]"
+    }
+  }
 }
