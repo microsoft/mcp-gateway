@@ -61,7 +61,10 @@ var federatedCredWorkloadName = substring(federatedCredWorkloadNameBase, 0, min(
 
 // Cloud-aware endpoint variables derived from the deployment environment
 var azureAdInstance = environment().authentication.loginEndpoint
-var cosmosPrivateDnsZoneName = 'privatelink.documents.${environment().suffixes.cosmosdbDns}'
+// environment().suffixes does not include a Cosmos DB DNS suffix (Azure/bicep#12482),
+// so derive it from the cloud name instead.
+var cosmosDnsSuffix = environment().name == 'AzureUSGovernment' ? 'azure.us' : 'azure.com'
+var cosmosPrivateDnsZoneName = 'privatelink.documents.${cosmosDnsSuffix}'
 
 // VNet
 resource vnet 'Microsoft.Network/virtualNetworks@2022-07-01' = {

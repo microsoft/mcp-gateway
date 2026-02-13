@@ -128,6 +128,14 @@ function Start-Deployment {
     Write-ColorOutput "MCP Gateway Deployment" -Type Info
     Write-ColorOutput "========================================`n" -Type Info
 
+    # Validate location for the target cloud environment
+    $govRegions = @('usgovvirginia', 'usgovtexas', 'usgovarizona', 'usdodeast', 'usdodcentral')
+    if ($CloudEnvironment -eq 'AzureUSGovernment' -and $Location -notin $govRegions) {
+        Write-ColorOutput "Location '$Location' is not a valid Azure Government region." -Type Error
+        Write-ColorOutput "Valid regions: $($govRegions -join ', ')" -Type Error
+        throw "Please specify a valid Azure Government region using the -Location parameter."
+    }
+
     # Check prerequisites
     Test-Prerequisites
 

@@ -69,7 +69,8 @@
     "federatedCredWorkloadNameBase": "[format('{0}-workload', variables('federatedCredName'))]",
     "federatedCredWorkloadName": "[substring(variables('federatedCredWorkloadNameBase'), 0, min(length(variables('federatedCredWorkloadNameBase')), 128))]",
     "azureAdInstance": "[environment().authentication.loginEndpoint]",
-    "cosmosPrivateDnsZoneName": "[format('privatelink.documents.{0}', environment().suffixes.cosmosdbDns)]"
+    "cosmosDnsSuffix": "[if(equals(environment().name, 'AzureUSGovernment'), 'azure.us', 'azure.com')]",
+    "cosmosPrivateDnsZoneName": "[format('privatelink.documents.{0}', variables('cosmosDnsSuffix'))]"
   },
   "resources": [
     {
