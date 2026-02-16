@@ -153,6 +153,68 @@ namespace Microsoft.McpGateway.Management.Service
             return allowedResources;
         }
 
+        /// <inheritdoc />
+        public async Task RegisterToolDefinitionAsync(string adapterName, ModelContextProtocol.Protocol.Tool tool, string createdBy, CancellationToken cancellationToken)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(adapterName);
+            ArgumentNullException.ThrowIfNull(tool);
+            ArgumentException.ThrowIfNullOrEmpty(createdBy);
+
+            // Create tool name that references the source adapter
+            var toolName = $"{adapterName}-{tool.Name}";
+
+            _logger.LogInformation("Registering tool definition {ToolName} from adapter {AdapterName}", toolName, adapterName);
+
+            // Create tool resource with metadata only - no deployment needed
+            var toolData = new ToolData
+            {
+                Name = toolName,
+                Description = tool.Description ?? string.Empty,
+                // Reference the adapter as the "image" (for routing purposes)
+                ImageName = adapterName,
+                ImageVersion = "adapter-tool",
+                EnvironmentVariables = new Dictionary<string, string>
+                {
+                    ["SOURCE_ADAPTER"] = adapterName,
+                    ["ORIGINAL_TOOL_NAME"] = tool.Name
+                },
+                ReplicaCount = 0, // No deployment
+                UseWorkloadIdentity = false,
+                ToolDefinition = new Contracts.ToolDefinition
+                {
+                    Tool = tool,
+                    Port = 0,
+                    Path = $"/adapters/{adapterName}/mcp"
+                }
+            };
+
+            var toolResource = ToolResource.Create(toolData, createdBy, DateTimeOffset.UtcNow);
+
+            // Store without deployment
+            await _store.UpsertAsync(toolResource, cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation("Tool definition {ToolName} registered successfully", toolName);
+        }
+
+        /// <inheritdoc />
+        public async Task DeleteToolsByAdapterAsync(string adapterName, CancellationToken cancellationToken)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(adapterName);
+
+            _logger.LogInformation("Deleting all tools associated with adapter {AdapterName}", adapterName);
+
+            var allTools = await _store.ListAsync(cancellationToken).ConfigureAwait(false);
+            var toolPrefix = $"{adapterName}-";
+            var adapterTools = allTools.Where(t => t.Name.StartsWith(toolPrefix, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            foreach (var tool in adapterTools)
+            {
+                _logger.LogInformation("Deleting tool {ToolName} associated with adapter {AdapterName}", tool.Name, adapterName);
+                await _store.DeleteAsync(tool.Name, cancellationToken).ConfigureAwait(false);
+            }
+
+            _logger.LogInformation("Deleted {Count} tools associated with adapter {AdapterName}", adapterTools.Count, adapterName);
+        }
+
         private async Task EnsureAccessAsync(ClaimsPrincipal accessContext, ToolResource resource, Operation operation)
         {
             ArgumentNullException.ThrowIfNull(accessContext);

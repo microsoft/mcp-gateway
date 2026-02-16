@@ -12,13 +12,25 @@ using Microsoft.McpGateway.Management.Store;
 
 namespace Microsoft.McpGateway.Management.Service
 {
-    public class AdapterManagementService(IAdapterDeploymentManager adapterDeploymentManager, IAdapterResourceStore store, IPermissionProvider permissionProvider, ILogger<AdapterManagementService> logger) : IAdapterManagementService
+    public class AdapterManagementService : IAdapterManagementService
     {
         private const string NamePattern = "^[a-z0-9-]+$";
-        private readonly IAdapterDeploymentManager _deploymentManager = adapterDeploymentManager ?? throw new ArgumentNullException(nameof(adapterDeploymentManager));
-        private readonly IAdapterResourceStore _store = store ?? throw new ArgumentNullException(nameof(store));
-        private readonly IPermissionProvider _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
-        private readonly ILogger _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        private readonly IAdapterDeploymentManager _deploymentManager;
+        private readonly IAdapterResourceStore _store;
+        private readonly IPermissionProvider _permissionProvider;
+        private readonly ILogger<AdapterManagementService> _logger;
+
+        public AdapterManagementService(
+            IAdapterDeploymentManager adapterDeploymentManager,
+            IAdapterResourceStore store,
+            IPermissionProvider permissionProvider,
+            ILogger<AdapterManagementService> logger)
+        {
+            _deploymentManager = adapterDeploymentManager ?? throw new ArgumentNullException(nameof(adapterDeploymentManager));
+            _store = store ?? throw new ArgumentNullException(nameof(store));
+            _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        }
 
         public async Task<AdapterResource> CreateAsync(ClaimsPrincipal accessContext, AdapterData request, CancellationToken cancellationToken)
         {
@@ -31,20 +43,21 @@ namespace Microsoft.McpGateway.Management.Service
             var existing = await _store.TryGetAsync(request.Name, cancellationToken).ConfigureAwait(false);
             if (existing != null)
             {
-                logger.LogWarning("/adapters/{name} already exists.", request.Name.Sanitize());
+                _logger.LogWarning("/adapters/{name} already exists.", request.Name.Sanitize());
                 throw new ArgumentException("The adapter with the same name already exist.");
             }
 
             var userId = accessContext.GetUserId()!;
             var adapter = AdapterResource.Create(request, userId, DateTimeOffset.UtcNow);
 
-            logger.LogInformation("Start creating /adapters/{name}, creator {userId}", request.Name.Sanitize(), userId);
+            _logger.LogInformation("Start creating /adapters/{name}, creator {userId}", request.Name.Sanitize(), userId);
 
-            logger.LogInformation("Start kubernetes deployment for /adapters/{name}.", request.Name.Sanitize());
+            _logger.LogInformation("Start kubernetes deployment for /adapters/{name}.", request.Name.Sanitize());
             await _deploymentManager.CreateDeploymentAsync(request, ResourceType.Mcp, cancellationToken).ConfigureAwait(false);
 
-            logger.LogInformation("Start update internal storage for /adapters/{name}.", request.Name.Sanitize());
+            _logger.LogInformation("Start update internal storage for /adapters/{name}.", request.Name.Sanitize());
             await _store.UpsertAsync(adapter, cancellationToken).ConfigureAwait(false);
+
             return adapter;
         }
 
@@ -53,7 +66,7 @@ namespace Microsoft.McpGateway.Management.Service
             ArgumentNullException.ThrowIfNull(accessContext);
             ArgumentException.ThrowIfNullOrEmpty(name);
 
-            logger.LogInformation("Start getting /adapters/{name}.", name.Sanitize());
+            _logger.LogInformation("Start getting /adapters/{name}.", name.Sanitize());
             var adapter = await _store.TryGetAsync(name, cancellationToken).ConfigureAwait(false);
             if (adapter == null)
             {
@@ -69,7 +82,7 @@ namespace Microsoft.McpGateway.Management.Service
             ArgumentNullException.ThrowIfNull(accessContext);
             ArgumentNullException.ThrowIfNull(request);
 
-            logger.LogInformation("Start updating /adapters/{name}.", request.Name.Sanitize());
+            _logger.LogInformation("Start updating /adapters/{name}.", request.Name.Sanitize());
 
             var existing = await _store.TryGetAsync(request.Name, cancellationToken).ConfigureAwait(false)
                 ?? throw new ArgumentException("The adapter does not exist and cannot be updated.");
@@ -102,16 +115,16 @@ namespace Microsoft.McpGateway.Management.Service
             ArgumentNullException.ThrowIfNull(accessContext);
             ArgumentException.ThrowIfNullOrEmpty(name);
 
-            logger.LogInformation("Start deleting /adapters/{name}.", name.Sanitize());
+            _logger.LogInformation("Start deleting /adapters/{name}.", name.Sanitize());
             var existing = await _store.TryGetAsync(name, cancellationToken).ConfigureAwait(false)
                 ?? throw new ArgumentException("The adapter does not exist.");
 
             await EnsureAccessAsync(accessContext, existing, Operation.Write).ConfigureAwait(false);
 
-            logger.LogInformation("Start deleting storage record for /adapters/{name}.", name.Sanitize());
+            _logger.LogInformation("Start deleting storage record for /adapters/{name}.", name.Sanitize());
             await _store.DeleteAsync(name, cancellationToken).ConfigureAwait(false);
 
-            logger.LogInformation("Start deleting Kubernetes deployment for /adapters/{name}.", name.Sanitize());
+            _logger.LogInformation("Start deleting Kubernetes deployment for /adapters/{name}.", name.Sanitize());
             await _deploymentManager.DeleteDeploymentAsync(name, cancellationToken).ConfigureAwait(false);
         }
 
@@ -119,14 +132,14 @@ namespace Microsoft.McpGateway.Management.Service
         {
             ArgumentNullException.ThrowIfNull(accessContext);
 
-            logger.LogInformation("Start listing /adapters for user.");
+            _logger.LogInformation("Start listing /adapters for user.");
             var adapterResources = (await _store.ListAsync(cancellationToken).ConfigureAwait(false)).ToList();
             var allowedResources = await _permissionProvider.CheckAccessAsync(accessContext, adapterResources, Operation.Read).ConfigureAwait(false);
 
             var filteredCount = adapterResources.Count - allowedResources.Length;
             if (filteredCount > 0)
             {
-                logger.LogInformation("Filtered {count} adapter resources due to authorization.", filteredCount);
+                _logger.LogInformation("Filtered {count} adapter resources due to authorization.", filteredCount);
             }
 
             return allowedResources;
@@ -141,14 +154,14 @@ namespace Microsoft.McpGateway.Management.Service
             {
                 if (operation == Operation.Write)
                 {
-                    logger.LogInformation("User {userId} is authorized for write operations on adapter {resourceId}.", accessContext.GetUserId(), resource.Name.Sanitize());
+                    _logger.LogInformation("User {userId} is authorized for write operations on adapter {resourceId}.", accessContext.GetUserId(), resource.Name.Sanitize());
                 }
 
                 return;
             }
 
             var operationName = operation.ToString().ToLowerInvariant();
-            logger.LogWarning("User {userId} is denied {operation} access for adapter {resourceId}.", accessContext.GetUserId(), operationName, resource.Name.Sanitize());
+            _logger.LogWarning("User {userId} is denied {operation} access for adapter {resourceId}.", accessContext.GetUserId(), operationName, resource.Name.Sanitize());
             throw new UnauthorizedAccessException("You do not have permission to perform the operation.");
         }
     }

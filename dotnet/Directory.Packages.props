@@ -9,6 +9,7 @@
     <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.51.0" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Cosmos" Version="1.7.0" />
     <PackageVersion Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="9.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="9.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.10" />
     <PackageVersion Include="Microsoft.Identity.Web" Version="3.9.1" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />

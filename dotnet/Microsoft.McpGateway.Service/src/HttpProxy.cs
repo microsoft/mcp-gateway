@@ -10,19 +10,34 @@ namespace Microsoft.McpGateway.Service
 {
     public static class HttpProxy
     {
+        // Headers that should not be proxied
+        private static readonly HashSet<string> HopByHopHeaders = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
+            "TE", "Trailer", "Transfer-Encoding", "Upgrade"
+        };
+
         public static HttpRequestMessage CreateProxiedHttpRequest(HttpContext context, Func<Uri, Uri>? targetOverride = null)
         {
+            // Read request body for chunked transfer
+            var hasBody = context.Request.ContentLength > 0 || 
+                          context.Request.Headers.ContainsKey("Transfer-Encoding");
+            
             var requestMessage = new HttpRequestMessage
             {
                 Method = new HttpMethod(context.Request.Method),
                 RequestUri = targetOverride == null ? new Uri(context.Request.GetEncodedUrl()) : targetOverride(new Uri(context.Request.GetEncodedUrl())),
-                Content = context.Request.ContentLength > 0 ? new StreamContent(context.Request.Body) : null
+                Content = hasBody ? new StreamContent(context.Request.Body) : null
             };
 
             foreach (var header in context.Request.Headers)
             {
                 // Skip the inbound Authorization header
                 if (string.Equals(header.Key, HeaderNames.Authorization, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                
+                // Skip hop-by-hop headers
+                if (HopByHopHeaders.Contains(header.Key))
                     continue;
 
                 if (!requestMessage.Headers.TryAddWithoutValidation(header.Key, [.. header.Value]))

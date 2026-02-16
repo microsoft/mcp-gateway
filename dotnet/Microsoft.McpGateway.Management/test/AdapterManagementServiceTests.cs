@@ -38,7 +38,11 @@ namespace Microsoft.McpGateway.Management.Tests
                 .ReturnsAsync(true);
             _permissionProviderMock.Setup(x => x.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<IEnumerable<AdapterResource>>(), Operation.Read))
                 .ReturnsAsync((ClaimsPrincipal _, IEnumerable<AdapterResource> resources, Operation _) => resources.ToArray());
-            _service = new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, _permissionProviderMock.Object, _loggerMock.Object);
+            _service = new AdapterManagementService(
+                _deploymentManagerMock.Object, 
+                _storeMock.Object, 
+                _permissionProviderMock.Object,
+                _loggerMock.Object);
             _accessContext = new ClaimsPrincipal(new ClaimsIdentity([new(ClaimTypes.NameIdentifier, "user1")]));
         }
 

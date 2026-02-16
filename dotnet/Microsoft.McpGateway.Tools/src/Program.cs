@@ -40,24 +40,46 @@ if (builder.Environment.IsDevelopment())
 }
 else
 {
-    // In production, use Cosmos DB store
+    // In production, use Cosmos DB store with deferred initialization
     var config = builder.Configuration.GetSection("CosmosSettings");
-    var credential = new DefaultAzureCredential();
-    var cosmosClient = new CosmosClient(config["AccountEndpoint"], credential, new CosmosClientOptions
+    var accountEndpoint = config["AccountEndpoint"];
+    var databaseName = config["DatabaseName"];
+    
+    if (string.IsNullOrEmpty(accountEndpoint) || string.IsNullOrEmpty(databaseName))
     {
-        Serializer = new CosmosSystemTextJsonSerializer(new JsonSerializerOptions
+        throw new InvalidOperationException(
+            "CosmosSettings:AccountEndpoint and CosmosSettings:DatabaseName must be configured in Production mode. " +
+            $"AccountEndpoint: '{accountEndpoint ?? "(null)"}', DatabaseName: '{databaseName ?? "(null)"}'");
+    }
+
+    // Register CosmosClient as singleton with lazy initialization
+    builder.Services.AddSingleton<CosmosClient>(sp =>
+    {
+        var logger = sp.GetRequiredService<ILogger<CosmosClient>>();
+        logger.LogInformation("Initializing CosmosClient for endpoint: {Endpoint}", accountEndpoint);
+        
+        var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
         {
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-        })
+            ManagedIdentityClientId = Environment.GetEnvironmentVariable("AZURE_CLIENT_ID")
+        });
+        
+        return new CosmosClient(accountEndpoint, credential, new CosmosClientOptions
+        {
+            Serializer = new CosmosSystemTextJsonSerializer(new JsonSerializerOptions
+            {
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+            })
+        });
     });
 
     // Register IToolResourceStore
     builder.Services.AddSingleton<IToolResourceStore>(sp =>
     {
+        var cosmosClient = sp.GetRequiredService<CosmosClient>();
         var logger = sp.GetRequiredService<ILogger<CosmosToolResourceStore>>();
         return new CosmosToolResourceStore(
             cosmosClient,
-            config["DatabaseName"]!,
+            databaseName!,
             "ToolContainer",
             logger);
     });
@@ -85,7 +107,7 @@ builder.Services.AddMcpServer()
 
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenAnyIP(8000);
+    options.ListenAnyIP(8002);
 });
 
 var app = builder.Build();

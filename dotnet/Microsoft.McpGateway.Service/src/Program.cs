@@ -148,13 +148,37 @@ else
         return new KubernetesAdapterDeploymentManager(config["Endpoint"]!, c.GetRequiredService<IKubeClientWrapper>(), c.GetRequiredService<ILogger<KubernetesAdapterDeploymentManager>>());
     });
 }
-builder.Services.AddSingleton<IAdapterManagementService, AdapterManagementService>();
 builder.Services.AddSingleton<IToolManagementService, ToolManagementService>();
 builder.Services.AddSingleton<IAdapterRichResultProvider, AdapterRichResultProvider>();
+
+// MCP Aggregator service for aggregating tools from all adapters
+builder.Services.AddHttpClient("McpAggregator", client =>
+{
+    var publicOrigin = builder.Configuration.GetValue<string>("PublicOrigin") 
+        ?? "http://localhost:8000";
+    client.BaseAddress = new Uri(publicOrigin);
+    client.Timeout = TimeSpan.FromSeconds(60);
+});
+builder.Services.AddSingleton<Microsoft.McpGateway.Service.Mcp.IMcpAggregatorService, Microsoft.McpGateway.Service.Mcp.McpAggregatorService>();
+
+// AdapterManagementService
+builder.Services.AddSingleton<IAdapterManagementService, AdapterManagementService>();
 
 builder.Services.AddAuthorization();
 builder.Services.AddControllers();
 builder.Services.AddHttpClient();
+
+// Add CORS for UI access
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+    {
+        policy.AllowAnyOrigin()
+              .AllowAnyMethod()
+              .AllowAnyHeader()
+              .WithExposedHeaders("mcp-session-id");
+    });
+});
 
 builder.WebHost.ConfigureKestrel(options =>
 {
@@ -164,6 +188,7 @@ builder.WebHost.ConfigureKestrel(options =>
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
+app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
