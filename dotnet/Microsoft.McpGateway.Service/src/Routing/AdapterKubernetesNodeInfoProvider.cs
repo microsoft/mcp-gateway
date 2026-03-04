@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using k8s;
 using k8s.Models;
 using Microsoft.McpGateway.Management.Deployment;
+using Microsoft.McpGateway.Management.Extensions;
 
 namespace Microsoft.McpGateway.Service.Routing
 {
@@ -83,7 +84,7 @@ namespace Microsoft.McpGateway.Service.Routing
                         foreach (var kvp in _healthyPodsByStatefulSet)
                         {
                             _healthyPodsByStatefulSet[kvp.Key] = kvp.Value;
-                            Console.WriteLine($"{kvp.Key}: [{string.Join(", ", kvp.Value)}]");
+                            _logger.LogDebug("Healthy pods for {statefulSetName}: [{pods}]", kvp.Key.Sanitize(), string.Join(", ", kvp.Value).Sanitize());
                         }
 
                         _logger.LogInformation("Kubernetes info initial fetching has completed, total {count} healthy pods.", readyPods.Count);
@@ -140,7 +141,6 @@ namespace Microsoft.McpGateway.Service.Routing
                             },
                             onError: ex =>
                             {
-                                Console.WriteLine($"Watch error: {ex}");
                                 _logger.LogError(ex, "Kubernetes watch encountered an error.");
                                 watcherEnd.TrySetResult(true);
                             },
@@ -154,7 +154,7 @@ namespace Microsoft.McpGateway.Service.Routing
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning("Failed to update healthy pod map {message}", ex.Message);
+                        _logger.LogWarning("Failed to update healthy pod map {message}", ex.Message.Sanitize());
                     }
 
                     await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);

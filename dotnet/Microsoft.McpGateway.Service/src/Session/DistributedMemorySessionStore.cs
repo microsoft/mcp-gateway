@@ -4,6 +4,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.McpGateway.Management.Extensions;
 
 namespace Microsoft.McpGateway.Service.Session
 {
@@ -89,7 +90,7 @@ namespace Microsoft.McpGateway.Service.Session
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning("Exception occurred when trying to clean up in-memory cache: {message}", ex.Message);
+                        _logger.LogWarning("Exception occurred when trying to clean up in-memory cache: {message}", ex.Message.Sanitize());
                     }
 
                     _logger.LogInformation("Finish cleaning up in-memory session store cache.");
