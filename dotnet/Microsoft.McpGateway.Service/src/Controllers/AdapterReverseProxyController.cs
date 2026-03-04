@@ -4,6 +4,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.McpGateway.Management.Authorization;
+using Microsoft.McpGateway.Management.Extensions;
 using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Service.Session;
 
@@ -75,14 +76,14 @@ namespace Microsoft.McpGateway.Service.Controllers
             var adapter = await adapterResourceStore.TryGetAsync(name, cancellationToken).ConfigureAwait(false);
             if (adapter == null)
             {
-                logger.LogWarning("Adapter {adapterName} not found while attempting proxy access.", name);
+                logger.LogWarning("Adapter {adapterName} not found while attempting proxy access.", name.Sanitize());
                 HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
                 return false;
             }
 
             if (!await permissionProvider.CheckAccessAsync(HttpContext.User, adapter, Operation.Read).ConfigureAwait(false))
             {
-                logger.LogWarning("User {userId} denied read access for adapter {adapterName} via proxy.", HttpContext.User?.Identity?.Name, name);
+                logger.LogWarning("User {userId} denied read access for adapter {adapterName} via proxy.", HttpContext.User?.Identity?.Name?.Sanitize(), name.Sanitize());
                 HttpContext.Response.StatusCode = StatusCodes.Status403Forbidden;
                 return false;
             }
