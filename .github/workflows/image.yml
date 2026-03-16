@@ -19,6 +19,12 @@ jobs:
     - name: Checkout source
       uses: actions/checkout@v3
 
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
     - name: Log in to the Container registry
       uses: docker/login-action@v3
       with:
@@ -26,16 +32,20 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Setup .NET SDK
-      uses: actions/setup-dotnet@v4
+    - name: Build and push mcp-gateway multi-arch image
+      uses: docker/build-push-action@v5
       with:
-        dotnet-version: '8.x'
+        context: .
+        file: ./dotnet/Microsoft.McpGateway.Service/Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ghcr.io/${{ github.repository_owner }}/mcp-gateway:latest
 
-    - name: Restore dependencies
-      run: dotnet restore dotnet/Microsoft.McpGateway.sln --runtime linux-x64
-
-    - name: Publish and push the mcp-gateway container image
-      run: dotnet publish dotnet/Microsoft.McpGateway.Service/src/Microsoft.McpGateway.Service.csproj --configuration Release --no-restore /p:PublishProfile=github.pubxml /p:ContainerRepository=${{ github.repository_owner }}/mcp-gateway
-
-    - name: Publish and push the tool-gateway container image
-      run: dotnet publish dotnet/Microsoft.McpGateway.Tools/src/Microsoft.McpGateway.Tools.csproj --configuration Release --no-restore /p:PublishProfile=github.pubxml /p:ContainerRepository=${{ github.repository_owner }}/tool-gateway
+    - name: Build and push tool-gateway multi-arch image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./dotnet/Microsoft.McpGateway.Tools/Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ghcr.io/${{ github.repository_owner }}/tool-gateway:latest
