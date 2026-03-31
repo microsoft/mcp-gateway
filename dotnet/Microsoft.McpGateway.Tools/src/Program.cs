@@ -3,11 +3,11 @@
 
 using Azure.Identity;
 using Microsoft.Azure.Cosmos;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Tools.Contracts;
 using Microsoft.McpGateway.Tools.Services;
-using System.Linq;
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -22,45 +22,94 @@ builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
 // Add HttpClient for tool execution
 builder.Services.AddHttpClient();
 
+var storeBackend = builder.Configuration.GetValue<string>("StoreBackend") ?? "";
+
 // Configure tool resource store and tool definition provider
 if (builder.Environment.IsDevelopment())
-{
-    var redisConnection = builder.Configuration.GetValue<string>("Redis:ConnectionString") ?? "localhost:6379";
-    builder.Services.AddStackExchangeRedisCache(options =>
+{    
+
+    if (storeBackend.Equals("Postgres", StringComparison.OrdinalIgnoreCase))
     {
-        options.Configuration = redisConnection;
-        options.InstanceName = "mcpgateway:";
-    });
-    
-    // Use Redis-backed store that can be shared with the gateway service
-    builder.Services.AddSingleton<IToolResourceStore, RedisToolResourceStore>();
+        var postgresConnection = builder.Configuration.GetValue<string>("Postgres:ConnectionString")
+            ?? throw new InvalidOperationException("Postgres:ConnectionString is required when StoreBackend is Postgres.");
+
+        builder.Services.AddDistributedPostgresCache(options =>
+        {
+            options.ConnectionString = postgresConnection;
+            options.SchemaName = "public";
+            options.TableName = "mcp_gateway_cache";
+            options.CreateIfNotExists = true;
+        });
+
+        builder.Services.AddSingleton<IToolResourceStore>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<DistributedToolResourceStore>>();
+            return new DistributedToolResourceStore(sp.GetRequiredService<IDistributedCache>(), logger);
+        });
+    }
+    else
+    {
+        var redisConnection = builder.Configuration.GetValue<string>("Redis:ConnectionString") ?? "localhost:6379";
+        builder.Services.AddStackExchangeRedisCache(options =>
+        {
+            options.Configuration = redisConnection;
+            options.InstanceName = "mcpgateway:";
+        });
+
+        // Use Redis-backed store that can be shared with the gateway service
+        builder.Services.AddSingleton<IToolResourceStore, RedisToolResourceStore>();
+    }    
     
     builder.Logging.AddConsole();
     builder.Logging.SetMinimumLevel(LogLevel.Debug);
 }
 else
 {
-    // In production, use Cosmos DB store
-    var config = builder.Configuration.GetSection("CosmosSettings");
-    var credential = new DefaultAzureCredential();
-    var cosmosClient = new CosmosClient(config["AccountEndpoint"], credential, new CosmosClientOptions
-    {
-        Serializer = new CosmosSystemTextJsonSerializer(new JsonSerializerOptions
-        {
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-        })
-    });
 
-    // Register IToolResourceStore
-    builder.Services.AddSingleton<IToolResourceStore>(sp =>
+    if (storeBackend.Equals("Postgres", StringComparison.OrdinalIgnoreCase))
     {
-        var logger = sp.GetRequiredService<ILogger<CosmosToolResourceStore>>();
-        return new CosmosToolResourceStore(
-            cosmosClient,
-            config["DatabaseName"]!,
-            "ToolContainer",
-            logger);
-    });
+        var postgresConnection = builder.Configuration.GetValue<string>("Postgres:ConnectionString")
+            ?? throw new InvalidOperationException("Postgres:ConnectionString is required when StoreBackend is Postgres.");
+
+        builder.Services.AddDistributedPostgresCache(options =>
+        {
+            options.ConnectionString = postgresConnection;
+            options.SchemaName = "public";
+            options.TableName = "mcp_gateway_cache";
+            options.CreateIfNotExists = true;
+        });
+
+        builder.Services.AddSingleton<IToolResourceStore>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<DistributedToolResourceStore>>();
+            return new DistributedToolResourceStore(sp.GetRequiredService<IDistributedCache>(), logger);
+        });
+    }
+    
+    else
+    {
+        // In production, use Cosmos DB store
+        var config = builder.Configuration.GetSection("CosmosSettings");
+        var credential = new DefaultAzureCredential();
+        var cosmosClient = new CosmosClient(config["AccountEndpoint"], credential, new CosmosClientOptions
+        {
+            Serializer = new CosmosSystemTextJsonSerializer(new JsonSerializerOptions
+            {
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+            })
+        });
+
+        // Register IToolResourceStore
+        builder.Services.AddSingleton<IToolResourceStore>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<CosmosToolResourceStore>>();
+            return new CosmosToolResourceStore(
+                cosmosClient,
+                config["DatabaseName"]!,
+                "ToolContainer",
+                logger);
+        });
+    }
 }
 
 // Register IToolDefinitionProvider using the store
@@ -85,7 +134,8 @@ builder.Services.AddMcpServer()
 
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenAnyIP(8000);
+    var port = builder.Configuration.GetValue<int?>("Kestrel:Port") ?? 8000;
+    options.ListenAnyIP(port);
 });
 
 var app = builder.Build();

@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Azure.Cosmos.Fluent;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Identity.Web;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Deployment;
@@ -29,21 +30,52 @@ builder.Services.AddSingleton<IAdapterSessionStore, DistributedMemorySessionStor
 builder.Services.AddSingleton<IServiceNodeInfoProvider, AdapterKubernetesNodeInfoProvider>();
 builder.Services.AddSingleton<ISessionRoutingHandler, AdapterSessionRoutingHandler>();
 
+var storeBackend = builder.Configuration.GetValue<string>("StoreBackend") ?? "";
+
 if (builder.Environment.IsDevelopment())
 {
     builder.Services
         .AddAuthentication(DevelopmentAuthenticationHandler.SchemeName)
-        .AddScheme<AuthenticationSchemeOptions, DevelopmentAuthenticationHandler>(DevelopmentAuthenticationHandler.SchemeName, null);
+        .AddScheme<AuthenticationSchemeOptions, DevelopmentAuthenticationHandler>(DevelopmentAuthenticationHandler.SchemeName, null);    
 
-    var redisConnection = builder.Configuration.GetValue<string>("Redis:ConnectionString") ?? "localhost:6379";
-    builder.Services.AddStackExchangeRedisCache(options =>
+    if (storeBackend.Equals("Postgres", StringComparison.OrdinalIgnoreCase))
     {
-        options.Configuration = redisConnection;
-        options.InstanceName = "mcpgateway:";
-    });
+        var postgresConnection = builder.Configuration.GetValue<string>("Postgres:ConnectionString")
+            ?? throw new InvalidOperationException("Postgres:ConnectionString is required when StoreBackend is Postgres.");
 
-    builder.Services.AddSingleton<IAdapterResourceStore, RedisAdapterResourceStore>();
-    builder.Services.AddSingleton<IToolResourceStore, RedisToolResourceStore>();
+        builder.Services.AddDistributedPostgresCache(options =>
+        {
+            options.ConnectionString = postgresConnection;
+            options.SchemaName = "public";
+            options.TableName = "mcp_gateway_cache";
+            options.CreateIfNotExists = true;
+        });
+
+        builder.Services.AddSingleton<IAdapterResourceStore>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<DistributedAdapterResourceStore>>();
+            return new DistributedAdapterResourceStore(sp.GetRequiredService<IDistributedCache>(), logger);
+        });
+
+        builder.Services.AddSingleton<IToolResourceStore>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<DistributedToolResourceStore>>();
+            return new DistributedToolResourceStore(sp.GetRequiredService<IDistributedCache>(), logger);
+        });
+
+    }
+    else
+    {
+        var redisConnection = builder.Configuration.GetValue<string>("Redis:ConnectionString") ?? "localhost:6379";
+        builder.Services.AddStackExchangeRedisCache(options =>
+        {
+            options.Configuration = redisConnection;
+            options.InstanceName = "mcpgateway:";
+        });
+
+        builder.Services.AddSingleton<IAdapterResourceStore, RedisAdapterResourceStore>();
+        builder.Services.AddSingleton<IToolResourceStore, RedisToolResourceStore>();
+    }
 
     builder.Logging.AddConsole();
     builder.Logging.SetMinimumLevel(LogLevel.Debug);
@@ -70,38 +102,67 @@ else
     })
     .AddMicrosoftIdentityWebApi(azureAdConfig);
 
-    // Create CosmosClient with credential-based authentication
-    var cosmosConfig = builder.Configuration.GetSection("CosmosSettings");
-    var cosmosClient = new CosmosClient(
-        cosmosConfig["AccountEndpoint"], 
-        credential, 
-        new CosmosClientOptions
+    if (storeBackend.Equals("Postgres", StringComparison.OrdinalIgnoreCase))
+    {
+        var postgresConnection = builder.Configuration.GetValue<string>("Postgres:ConnectionString")
+            ?? throw new InvalidOperationException("Postgres:ConnectionString is required when StoreBackend is Postgres.");
+
+        builder.Services.AddDistributedPostgresCache(options =>
         {
-            Serializer = new CosmosSystemTextJsonSerializer(new JsonSerializerOptions
-            {
-                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-            })
+            options.ConnectionString = postgresConnection;
+            options.SchemaName = "public";
+            options.TableName = "mcp_gateway_cache";
+            options.CreateIfNotExists = true;
         });
 
-    builder.Services.AddSingleton<IAdapterResourceStore>(sp =>
-    {
-        var logger = sp.GetRequiredService<ILogger<CosmosAdapterResourceStore>>();
-        return new CosmosAdapterResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "AdapterContainer", logger);
-    });
+        builder.Services.AddSingleton<IAdapterResourceStore>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<DistributedAdapterResourceStore>>();
+            return new DistributedAdapterResourceStore(sp.GetRequiredService<IDistributedCache>(), logger);
+        });
 
-    builder.Services.AddSingleton<IToolResourceStore>(sp =>
-    {
-        var logger = sp.GetRequiredService<ILogger<CosmosToolResourceStore>>();
-        return new CosmosToolResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "ToolContainer", logger);
-    });
+        builder.Services.AddSingleton<IToolResourceStore>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<DistributedToolResourceStore>>();
+            return new DistributedToolResourceStore(sp.GetRequiredService<IDistributedCache>(), logger);
+        });
+
+    }
+    else {
+
+        // Create CosmosClient with credential-based authentication
+        var cosmosConfig = builder.Configuration.GetSection("CosmosSettings");
+        var cosmosClient = new CosmosClient(
+            cosmosConfig["AccountEndpoint"], 
+            credential, 
+            new CosmosClientOptions
+            {
+                Serializer = new CosmosSystemTextJsonSerializer(new JsonSerializerOptions
+                {
+                    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+                })
+            });
+
+        builder.Services.AddSingleton<IAdapterResourceStore>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<CosmosAdapterResourceStore>>();
+            return new CosmosAdapterResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "AdapterContainer", logger);
+        });
+
+        builder.Services.AddSingleton<IToolResourceStore>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<CosmosToolResourceStore>>();
+            return new CosmosToolResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "ToolContainer", logger);
+        });
     
-    builder.Services.AddCosmosCache(options =>
-    {
-        options.ContainerName = "CacheContainer";
-        options.DatabaseName = cosmosConfig["DatabaseName"]!;
-        options.CreateIfNotExists = true;
-        options.ClientBuilder = new CosmosClientBuilder(cosmosConfig["AccountEndpoint"], credential);
-    });
+        builder.Services.AddCosmosCache(options =>
+        {
+            options.ContainerName = "CacheContainer";
+            options.DatabaseName = cosmosConfig["DatabaseName"]!;
+            options.CreateIfNotExists = true;
+            options.ClientBuilder = new CosmosClientBuilder(cosmosConfig["AccountEndpoint"], credential);
+        });
+    }
 }
 
 builder.Services.AddSingleton<IKubeClientWrapper>(c =>
@@ -125,7 +186,8 @@ builder.Services.AddHttpClient();
 
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenAnyIP(8000);
+    var port = builder.Configuration.GetValue<int?>("Kestrel:Port") ?? 8000;
+    options.ListenAnyIP(port);
 });
 
 var app = builder.Build();
