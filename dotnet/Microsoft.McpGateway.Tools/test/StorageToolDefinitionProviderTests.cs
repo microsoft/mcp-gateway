@@ -601,6 +601,21 @@ namespace Microsoft.McpGateway.Tools.Tests
         }
 
         [TestMethod]
+        public void Constructor_ShouldThrowArgumentNullException_WhenCacheIsNull()
+        {
+            // Act
+            var act = () => new StorageToolDefinitionProvider(
+                _toolResourceStoreMock.Object,
+                _permissionProviderMock.Object,
+                _httpContextAccessorMock.Object,
+                null!,
+                _loggerMock.Object);
+
+            // Assert
+            act.Should().Throw<ArgumentNullException>();
+        }
+
+        [TestMethod]
         public async Task GetToolDefinitionsAsync_ShouldReturnMultipleToolsWithDifferentConfigurations()
         {
             // Arrange

@@ -238,6 +238,9 @@ namespace Microsoft.McpGateway.Management.Deployment
 
         private static void ValidateImageReference(string imageName, string imageVersion)
         {
+            ArgumentException.ThrowIfNullOrEmpty(imageName);
+            ArgumentException.ThrowIfNullOrEmpty(imageVersion);
+
             if (imageName.Contains("..", StringComparison.Ordinal))
                 throw new ArgumentException("ImageName must not contain path traversal sequences.", nameof(imageName));
 

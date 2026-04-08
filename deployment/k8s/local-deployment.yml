@@ -10,7 +10,9 @@ metadata:
   namespace: adapter
 type: Opaque
 stringData:
+  # Local development only. Override with your own value if needed.
   password: localdev-redis-pass
+  connectionString: "redis-service:6379,password=localdev-redis-pass"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -37,13 +39,11 @@ spec:
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: "Development"
-            - name: REDIS_PASSWORD
+            - name: Redis__ConnectionString
               valueFrom:
                 secretKeyRef:
                   name: redis-secret
-                  key: password
-            - name: Redis__ConnectionString
-              value: "redis-service:6379,password=$(REDIS_PASSWORD)"
+                  key: connectionString
 ---
 apiVersion: v1
 kind: Service
@@ -127,13 +127,11 @@ spec:
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: "Development"
-            - name: REDIS_PASSWORD
+            - name: Redis__ConnectionString
               valueFrom:
                 secretKeyRef:
                   name: redis-secret
-                  key: password
-            - name: Redis__ConnectionString
-              value: "redis-service:6379,password=$(REDIS_PASSWORD)"
+                  key: connectionString
 ---
 apiVersion: v1
 kind: Service

@@ -17,7 +17,7 @@ namespace Microsoft.McpGateway.Tools.Services
     public class StorageToolDefinitionProvider : IToolDefinitionProvider
     {
         private const int CacheExpirationMinutes = 5;
-        private const string ToolResourcesCacheKey = "ToolResources";
+        private static readonly string ToolResourcesCacheKey = $"{typeof(StorageToolDefinitionProvider).FullName}.ToolResources";
 
         private readonly IToolResourceStore _toolResourceStore;
         private readonly IPermissionProvider _permissionProvider;
@@ -76,6 +76,10 @@ namespace Microsoft.McpGateway.Tools.Services
 
                 _logger.LogInformation("Loaded {Count} tool resources from store", toolResources.Count);
                 return await FilterToolDefinitionsAsync(toolResources, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {

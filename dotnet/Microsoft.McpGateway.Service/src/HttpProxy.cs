@@ -13,7 +13,7 @@ namespace Microsoft.McpGateway.Service
         public static HttpRequestMessage CreateProxiedHttpRequest(HttpContext context, Func<Uri, Uri>? targetOverride = null)
         {
             var hasBody = context.Request.ContentLength > 0 ||
-                          string.Equals(context.Request.Headers[HeaderNames.TransferEncoding], "chunked", StringComparison.OrdinalIgnoreCase);
+                          context.Request.ContentLength is null && !HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method) && !HttpMethods.IsDelete(context.Request.Method) && !HttpMethods.IsOptions(context.Request.Method);
 
             var requestMessage = new HttpRequestMessage
             {

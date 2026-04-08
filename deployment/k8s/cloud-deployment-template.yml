@@ -185,7 +185,7 @@ spec:
   policyTypes:
     - Ingress
 ---
-# NetworkPolicy: Allow external traffic to mcpgateway service
+# NetworkPolicy: Allow unrestricted ingress to mcpgateway on port 8000
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
