@@ -5,6 +5,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Contracts;
@@ -44,6 +45,7 @@ namespace Microsoft.McpGateway.Tools.Tests
                 _toolResourceStoreMock.Object,
                 _permissionProviderMock.Object,
                 _httpContextAccessorMock.Object,
+                new MemoryCache(new MemoryCacheOptions()),
                 _loggerMock.Object);
         }
 
@@ -546,6 +548,7 @@ namespace Microsoft.McpGateway.Tools.Tests
                 null!,
                 _permissionProviderMock.Object,
                 _httpContextAccessorMock.Object,
+                new MemoryCache(new MemoryCacheOptions()),
                 _loggerMock.Object);
 
             // Assert
@@ -560,6 +563,7 @@ namespace Microsoft.McpGateway.Tools.Tests
                 _toolResourceStoreMock.Object,
                 _permissionProviderMock.Object,
                 _httpContextAccessorMock.Object,
+                new MemoryCache(new MemoryCacheOptions()),
                 null!);
 
             // Assert
@@ -574,6 +578,7 @@ namespace Microsoft.McpGateway.Tools.Tests
                 _toolResourceStoreMock.Object,
                 null!,
                 _httpContextAccessorMock.Object,
+                new MemoryCache(new MemoryCacheOptions()),
                 _loggerMock.Object);
 
             // Assert
@@ -587,6 +592,22 @@ namespace Microsoft.McpGateway.Tools.Tests
             var act = () => new StorageToolDefinitionProvider(
                 _toolResourceStoreMock.Object,
                 _permissionProviderMock.Object,
+                null!,
+                new MemoryCache(new MemoryCacheOptions()),
+                _loggerMock.Object);
+
+            // Assert
+            act.Should().Throw<ArgumentNullException>();
+        }
+
+        [TestMethod]
+        public void Constructor_ShouldThrowArgumentNullException_WhenCacheIsNull()
+        {
+            // Act
+            var act = () => new StorageToolDefinitionProvider(
+                _toolResourceStoreMock.Object,
+                _permissionProviderMock.Object,
+                _httpContextAccessorMock.Object,
                 null!,
                 _loggerMock.Object);
 

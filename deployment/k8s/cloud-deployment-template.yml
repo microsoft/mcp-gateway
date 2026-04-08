@@ -173,3 +173,55 @@ spec:
     - protocol: TCP
       port: 8000
       targetPort: 8000
+---
+# NetworkPolicy: Default deny all ingress to adapter namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: adapter
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# NetworkPolicy: Allow unrestricted ingress to mcpgateway on port 8000
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-mcpgateway-ingress
+  namespace: adapter
+spec:
+  podSelector:
+    matchLabels:
+      app: mcpgateway
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8000
+---
+# NetworkPolicy: Only mcpgateway and toolgateway can reach adapter/tool pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: adapter-access
+  namespace: adapter
+spec:
+  podSelector:
+    matchLabels:
+      adapter/type: mcp
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: mcpgateway
+        - podSelector:
+            matchLabels:
+              app: toolgateway
+      ports:
+        - protocol: TCP
+          port: 8000

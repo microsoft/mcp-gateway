@@ -3,6 +3,7 @@
 
 using System.Net;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using k8s.Autorest;
 using k8s.Models;
 using Microsoft.Extensions.Logging;
@@ -14,6 +15,8 @@ namespace Microsoft.McpGateway.Management.Deployment
     public class KubernetesAdapterDeploymentManager : IAdapterDeploymentManager
     {
         private const string AdapterNamespace = "adapter";
+        private static readonly Regex ValidImageNamePattern = new(@"^[a-z0-9]+([._/-][a-z0-9]+)*$", RegexOptions.Compiled);
+        private static readonly Regex ValidImageVersionPattern = new(@"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$", RegexOptions.Compiled);
         private readonly IKubeClientWrapper _kubeClient;
         private readonly string _containerRegistryAddress;
         private readonly ILogger<KubernetesAdapterDeploymentManager> _logger;
@@ -29,6 +32,8 @@ namespace Microsoft.McpGateway.Management.Deployment
 
         public async Task CreateDeploymentAsync(AdapterData request, ResourceType resourceType, CancellationToken cancellationToken)
         {
+            ValidateImageReference(request.ImageName, request.ImageVersion);
+
             var labels = new Dictionary<string, string>
             {
                 { $"{AdapterNamespace}/type", resourceType.ToString().ToLowerInvariant() },
@@ -145,6 +150,8 @@ namespace Microsoft.McpGateway.Management.Deployment
 
         public async Task UpdateDeploymentAsync(AdapterData request, ResourceType resourceType, CancellationToken cancellationToken)
         {
+            ValidateImageReference(request.ImageName, request.ImageVersion);
+
             var statefulSet = await _kubeClient.ReadStatefulSetAsync(request.Name, AdapterNamespace, cancellationToken).ConfigureAwait(false);
             
             var patch = new
@@ -227,6 +234,21 @@ namespace Microsoft.McpGateway.Management.Deployment
             using var reader = new StreamReader(logStream);
             var logText = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             return logText;
+        }
+
+        private static void ValidateImageReference(string imageName, string imageVersion)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(imageName);
+            ArgumentException.ThrowIfNullOrEmpty(imageVersion);
+
+            if (imageName.Contains("..", StringComparison.Ordinal))
+                throw new ArgumentException("ImageName must not contain path traversal sequences.", nameof(imageName));
+
+            if (!ValidImageNamePattern.IsMatch(imageName))
+                throw new ArgumentException("ImageName contains invalid characters. Only lowercase alphanumeric, dots, dashes, and slashes are allowed.", nameof(imageName));
+
+            if (!ValidImageVersionPattern.IsMatch(imageVersion))
+                throw new ArgumentException("ImageVersion contains invalid characters.", nameof(imageVersion));
         }
     }
 }
