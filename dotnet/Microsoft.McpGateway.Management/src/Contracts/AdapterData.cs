@@ -23,12 +23,14 @@ namespace Microsoft.McpGateway.Management.Contracts
         /// The name of the image associated with the adapter.
         /// </summary>
         [JsonPropertyOrder(2)]
+        [RegularExpression(@"^[a-z0-9]+([._/-][a-z0-9]+)*$", ErrorMessage = "ImageName must be a valid container image path component (lowercase alphanumeric, dots, dashes, slashes; no '..' or leading/trailing special chars).")]
         public required string ImageName { get; set; }
 
         /// <summary>
         /// The version of the image associated with the adapter.
         /// </summary>
         [JsonPropertyOrder(3)]
+        [RegularExpression(@"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$", ErrorMessage = "ImageVersion must be a valid container image tag.")]
         public required string ImageVersion { get; set; }
 
         /// <summary>

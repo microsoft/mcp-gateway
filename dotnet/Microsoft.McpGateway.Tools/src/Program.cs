@@ -64,6 +64,7 @@ else
 }
 
 // Register IToolDefinitionProvider using the store
+builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<IToolDefinitionProvider, StorageToolDefinitionProvider>();
 
 // Register tool executor

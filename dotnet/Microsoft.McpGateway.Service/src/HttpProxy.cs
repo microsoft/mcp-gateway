@@ -12,11 +12,14 @@ namespace Microsoft.McpGateway.Service
     {
         public static HttpRequestMessage CreateProxiedHttpRequest(HttpContext context, Func<Uri, Uri>? targetOverride = null)
         {
+            var hasBody = context.Request.ContentLength > 0 ||
+                          string.Equals(context.Request.Headers[HeaderNames.TransferEncoding], "chunked", StringComparison.OrdinalIgnoreCase);
+
             var requestMessage = new HttpRequestMessage
             {
                 Method = new HttpMethod(context.Request.Method),
                 RequestUri = targetOverride == null ? new Uri(context.Request.GetEncodedUrl()) : targetOverride(new Uri(context.Request.GetEncodedUrl())),
-                Content = context.Request.ContentLength > 0 ? new StreamContent(context.Request.Body) : null
+                Content = hasBody ? new StreamContent(context.Request.Body) : null
             };
 
             foreach (var header in context.Request.Headers)
@@ -25,17 +28,15 @@ namespace Microsoft.McpGateway.Service
                 if (string.Equals(header.Key, HeaderNames.Authorization, StringComparison.OrdinalIgnoreCase))
                     continue;
 
+                // Skip identity headers entirely - they will be re-injected from the authenticated principal below
+                if (string.Equals(header.Key, ForwardedIdentityHeaders.UserId, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(header.Key, ForwardedIdentityHeaders.UserName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(header.Key, ForwardedIdentityHeaders.Roles, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
                 if (!requestMessage.Headers.TryAddWithoutValidation(header.Key, [.. header.Value]))
                     requestMessage.Content?.Headers.TryAddWithoutValidation(header.Key, [.. header.Value]);
             }
-
-            // Ensure downstream services only receive sanitized identity headers
-            requestMessage.Headers.Remove(ForwardedIdentityHeaders.UserId);
-            requestMessage.Headers.Remove(ForwardedIdentityHeaders.UserName);
-            requestMessage.Headers.Remove(ForwardedIdentityHeaders.Roles);
-            requestMessage.Content?.Headers.Remove(ForwardedIdentityHeaders.UserId);
-            requestMessage.Content?.Headers.Remove(ForwardedIdentityHeaders.UserName);
-            requestMessage.Content?.Headers.Remove(ForwardedIdentityHeaders.Roles);
 
             var principal = context.User;
             if (principal?.Identity?.IsAuthenticated == true)
@@ -55,14 +56,40 @@ namespace Microsoft.McpGateway.Service
             return requestMessage;
         }
 
+        // Response headers that are safe to forward from backend pods to clients.
+        private static readonly HashSet<string> AllowedResponseHeaders = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "Content-Type",
+            "Content-Length",
+            "Content-Encoding",
+            "Content-Language",
+            "Content-Range",
+            "Cache-Control",
+            "ETag",
+            "Last-Modified",
+            "Accept-Ranges",
+            "Vary",
+            "Date",
+            "Retry-After",
+            "X-Request-Id",
+            "X-Correlation-Id",
+            "mcp-session-id",
+        };
+
         public static Task CopyProxiedHttpResponseAsync(HttpContext context, HttpResponseMessage response, CancellationToken cancellationToken)
         {
             context.Response.StatusCode = (int)response.StatusCode;
 
             foreach (var header in response.Headers)
-                context.Response.Headers[header.Key] = header.Value.ToArray();
+            {
+                if (AllowedResponseHeaders.Contains(header.Key))
+                    context.Response.Headers[header.Key] = header.Value.ToArray();
+            }
             foreach (var header in response.Content.Headers)
-                context.Response.Headers[header.Key] = header.Value.ToArray();
+            {
+                if (AllowedResponseHeaders.Contains(header.Key))
+                    context.Response.Headers[header.Key] = header.Value.ToArray();
+            }
 
             context.Response.Headers.Remove(HeaderNames.TransferEncoding);
 
