@@ -69,7 +69,7 @@ namespace Microsoft.McpGateway.Management.Authorization
 
             if (resource.RequiredRoles == null || resource.RequiredRoles.Count == 0)
             {
-                return true;
+                return false;
             }
 
             return resource.RequiredRoles.Any(role => roles.Any(userRole => string.Equals(userRole, role, StringComparison.OrdinalIgnoreCase)));

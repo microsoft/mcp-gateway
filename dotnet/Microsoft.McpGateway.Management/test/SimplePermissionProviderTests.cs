@@ -73,7 +73,7 @@ public class SimplePermissionProviderTests
     }
 
     [TestMethod]
-    public async Task EmptyRequiredRoles_ShouldPermitRead()
+    public async Task EmptyRequiredRoles_ShouldDenyRead()
     {
         var principal = CreatePrincipal("user");
         var adapter = CreatePermission("adapter", "owner");
@@ -81,8 +81,8 @@ public class SimplePermissionProviderTests
         var tool = CreatePermission("tool", "owner");
         tool.RequiredRoles.Clear();
 
-        (await _provider.CheckAccessAsync(principal, adapter, Operation.Read)).Should().BeTrue();
-        (await _provider.CheckAccessAsync(principal, tool, Operation.Read)).Should().BeTrue();
+        (await _provider.CheckAccessAsync(principal, adapter, Operation.Read)).Should().BeFalse();
+        (await _provider.CheckAccessAsync(principal, tool, Operation.Read)).Should().BeFalse();
     }
 
     [TestMethod]

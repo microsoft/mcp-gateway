@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using Microsoft.AspNetCore.Http.Extensions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Net.Http.Headers;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Extensions;
@@ -31,7 +32,8 @@ namespace Microsoft.McpGateway.Service
                 // Skip identity headers entirely - they will be re-injected from the authenticated principal below
                 if (string.Equals(header.Key, ForwardedIdentityHeaders.UserId, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(header.Key, ForwardedIdentityHeaders.UserName, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(header.Key, ForwardedIdentityHeaders.Roles, StringComparison.OrdinalIgnoreCase))
+                    string.Equals(header.Key, ForwardedIdentityHeaders.Roles, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(header.Key, ForwardedIdentityHeaders.GatewaySecret, StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 if (!requestMessage.Headers.TryAddWithoutValidation(header.Key, [.. header.Value]))
@@ -51,6 +53,10 @@ namespace Microsoft.McpGateway.Service
                 if (roles.Count > 0)
                     requestMessage.Headers.TryAddWithoutValidation(ForwardedIdentityHeaders.Roles, string.Join(',', roles));
             }
+
+            var gatewaySecret = context.RequestServices.GetService<IConfiguration>()?.GetValue<string>("GatewaySettings:Secret");
+            if (!string.IsNullOrEmpty(gatewaySecret))
+                requestMessage.Headers.TryAddWithoutValidation(ForwardedIdentityHeaders.GatewaySecret, gatewaySecret);
 
             requestMessage.Headers.TryAddWithoutValidation("Forwarded", $"for={context.Connection.RemoteIpAddress};proto={context.Request.Scheme};host={context.Request.Host.Value}");
             return requestMessage;

@@ -13,6 +13,7 @@ stringData:
   # Local development only. Override with your own value if needed.
   password: localdev-redis-pass
   connectionString: "redis-service:6379,password=localdev-redis-pass"
+  gatewaySecret: localdev-gateway-secret
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -44,6 +45,11 @@ spec:
                 secretKeyRef:
                   name: redis-secret
                   key: connectionString
+            - name: GatewaySettings__Secret
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: gatewaySecret
 ---
 apiVersion: v1
 kind: Service
@@ -132,6 +138,11 @@ spec:
                 secretKeyRef:
                   name: redis-secret
                   key: connectionString
+            - name: GatewaySettings__Secret
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: gatewaySecret
 ---
 apiVersion: v1
 kind: Service

@@ -11,5 +11,6 @@ namespace Microsoft.McpGateway.Management.Authorization
         public const string UserId = "X-Mcp-UserId";
         public const string UserName = "X-Mcp-UserName";
         public const string Roles = "X-Mcp-Roles";
+        public const string GatewaySecret = "X-Gateway-Secret";
     }
 }
