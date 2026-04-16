@@ -152,14 +152,14 @@ flowchart LR
 
 The gateway provides entra id authentication and basic application role authorization for mcp servers and tools:
 
-- **Read** access is granted to the resource creator, principals assigned the configured role values (for example `mcp.engineer`), and anyone holding the mandatory administrator role `mcp.admin`.
+- **Read** access is granted to the resource creator, principals assigned the configured `requiredRoles` values (for example `mcp.engineer`), and anyone holding the mandatory administrator role `mcp.admin`. When `requiredRoles` is empty or omitted, only the creator and `mcp.admin` principals can read the resource.
 - **Write** access is restricted to the resource creator or principals holding the `mcp.admin` role.
 
 For step-by-step guidance on configuring Azure Entra ID (creating `mcp.admin` and other role values, assigning them to users or service principals, and supplying those values in adapter/tool payloads), see [docs/entra-app-roles.md](docs/entra-app-roles.md).
 
 ### Additional Capabilities
 
-- *New*: Support for **Proxying Local & Remote MCP Servers**. See [examples and usage](sample-servers/mcp-proxy/README.md).
+- Support for **Proxying Local & Remote MCP Servers**. See [examples and usage](sample-servers/mcp-proxy/README.md).
 - Stateless reverse proxy with a distributed session store (production mode).
 - Kubernetes-native deployment using StatefulSets and headless services.
 
@@ -457,7 +457,7 @@ az acr build -r "mgreg$resourceLabel" -f sample-servers/mcp-example/Dockerfile s
     "imageName": "mcp-example",
     "imageVersion": "1.0.0",
     "description": "test",
-    "requiredRoles": [] // Add entra id application role to restrict access
+    "requiredRoles": [] // Only creator and mcp.admin can access. Add roles (e.g. ["mcp.engineer"]) to grant read access to other principals.
   }
   ```
 
@@ -513,7 +513,7 @@ Content-Type: application/json
   "imageVersion": "1.0.0",
   "useWorkloadIdentity": true,
   "description": "Weather tool for getting current weather information",
-  "requiredRoles": [], // Add entra id application role to restrict access
+  "requiredRoles": [], // Only creator and mcp.admin can access. Add roles (e.g. ["mcp.engineer"]) to grant read access to other principals.
   "toolDefinition": {
     "tool": {
       "name": "weather",
@@ -578,6 +578,9 @@ az group delete --name <resourceGroupName> --yes
 
 - **Network Security**  
   Restrict incoming traffic within the virtual network and configure Private Endpoints for enhanced network security.
+
+- **Service-to-Service Authentication**  
+  The Tool Gateway requires a shared secret (`GatewaySettings:Secret`) to accept forwarded identity headers from the MCP Gateway. In production, generate a strong random value and supply it to both the `mcpgateway` and `toolgateway` pods via the `GatewaySettings__Secret` environment variable or a Kubernetes secret. Requests without a valid `X-Gateway-Secret` header are rejected with `401 Unauthorized`.
 
 - **Telemetry**  
   Enable advanced telemetry, detailed metrics, and alerts to support monitoring and troubleshooting in production.

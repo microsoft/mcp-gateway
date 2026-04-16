@@ -1,6 +1,7 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Contracts;
 using Microsoft.McpGateway.Management.Store;
@@ -16,13 +17,14 @@ namespace Microsoft.McpGateway.Tools.Services
     public class StorageToolDefinitionProvider : IToolDefinitionProvider
     {
         private const int CacheExpirationMinutes = 5;
+        private static readonly string ToolResourcesCacheKey = $"{typeof(StorageToolDefinitionProvider).FullName}.ToolResources";
 
         private readonly IToolResourceStore _toolResourceStore;
         private readonly IPermissionProvider _permissionProvider;
         private readonly IHttpContextAccessor _httpContextAccessor;
         private readonly ILogger<StorageToolDefinitionProvider> _logger;
-        private List<ToolResource>? _cachedToolResources;
-        private DateTime _lastLoadTime;
+        private readonly IMemoryCache _cache;
+        private readonly SemaphoreSlim _cacheLock = new(1, 1);
 
         /// <summary>
         /// Initializes a new instance of the <see cref="StorageToolDefinitionProvider"/> class.
@@ -31,16 +33,19 @@ namespace Microsoft.McpGateway.Tools.Services
             IToolResourceStore toolResourceStore,
             IPermissionProvider permissionProvider,
             IHttpContextAccessor httpContextAccessor,
+            IMemoryCache cache,
             ILogger<StorageToolDefinitionProvider> logger)
         {
             ArgumentNullException.ThrowIfNull(toolResourceStore);
             ArgumentNullException.ThrowIfNull(permissionProvider);
             ArgumentNullException.ThrowIfNull(httpContextAccessor);
+            ArgumentNullException.ThrowIfNull(cache);
             ArgumentNullException.ThrowIfNull(logger);
 
             _toolResourceStore = toolResourceStore;
             _permissionProvider = permissionProvider;
             _httpContextAccessor = httpContextAccessor;
+            _cache = cache;
             _logger = logger;
 
             _logger.LogInformation("Storage tool definition provider initialized");
@@ -48,29 +53,42 @@ namespace Microsoft.McpGateway.Tools.Services
 
         public async Task<List<ToolDefinition>> GetToolDefinitionsAsync(CancellationToken cancellationToken = default)
         {
-            var cacheExpiration = TimeSpan.FromMinutes(CacheExpirationMinutes);
-
-            // Simple caching mechanism
-            if (_cachedToolResources != null && DateTime.UtcNow - _lastLoadTime < cacheExpiration)
+            if (_cache.TryGetValue(ToolResourcesCacheKey, out List<ToolResource>? cachedResources) && cachedResources != null)
             {
-                return await FilterToolDefinitionsAsync(_cachedToolResources, cancellationToken).ConfigureAwait(false);
+                return await FilterToolDefinitionsAsync(cachedResources, cancellationToken).ConfigureAwait(false);
             }
 
+            await _cacheLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
+                // Double-check after acquiring lock
+                if (_cache.TryGetValue(ToolResourcesCacheKey, out cachedResources) && cachedResources != null)
+                {
+                    return await FilterToolDefinitionsAsync(cachedResources, cancellationToken).ConfigureAwait(false);
+                }
+
                 // Get all tool resources from the store
                 var toolResources = (await _toolResourceStore.ListAsync(cancellationToken).ConfigureAwait(false)).ToList();
 
-                _cachedToolResources = toolResources;
-                _lastLoadTime = DateTime.UtcNow;
+                var cacheOptions = new MemoryCacheEntryOptions()
+                    .SetAbsoluteExpiration(TimeSpan.FromMinutes(CacheExpirationMinutes));
+                _cache.Set(ToolResourcesCacheKey, toolResources, cacheOptions);
 
-                _logger.LogInformation("Loaded {Count} tool resources from store", _cachedToolResources.Count);
+                _logger.LogInformation("Loaded {Count} tool resources from store", toolResources.Count);
                 return await FilterToolDefinitionsAsync(toolResources, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to load tool definitions from store");
                 return [];
+            }
+            finally
+            {
+                _cacheLock.Release();
             }
         }
 
