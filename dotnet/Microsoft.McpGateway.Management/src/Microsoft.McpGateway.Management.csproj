@@ -8,8 +8,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="KubernetesClient" />
+    <PackageReference Include="KubernetesClient" />    
     <PackageReference Include="Microsoft.Azure.Cosmos" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Postgres" />
     <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="ModelContextProtocol" />

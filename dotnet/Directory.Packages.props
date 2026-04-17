@@ -8,6 +8,7 @@
     <PackageVersion Include="Microsoft.ApplicationInsights.AspNetCore" Version="2.23.0" />
     <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.51.0" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Cosmos" Version="1.7.0" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Postgres" Version="1.2.2" />
     <PackageVersion Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="9.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.10" />
     <PackageVersion Include="Microsoft.Identity.Web" Version="3.9.1" />

@@ -13,6 +13,7 @@
     <PackageReference Include="Microsoft.ApplicationInsights.AspNetCore" />
     <PackageReference Include="Microsoft.Azure.Cosmos" />
     <PackageReference Include="Microsoft.Extensions.Caching.Cosmos" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Postgres" />
     <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" />
     <PackageReference Include="Microsoft.Identity.Web" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" />
