@@ -9,6 +9,7 @@ using Microsoft.Azure.Cosmos.Fluent;
 using Microsoft.Identity.Web;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Deployment;
+using Microsoft.McpGateway.Management.Foundry;
 using Microsoft.McpGateway.Management.Service;
 using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Service.Authentication;
@@ -44,6 +45,8 @@ if (builder.Environment.IsDevelopment())
 
     builder.Services.AddSingleton<IAdapterResourceStore, RedisAdapterResourceStore>();
     builder.Services.AddSingleton<IToolResourceStore, RedisToolResourceStore>();
+    builder.Services.AddSingleton<IAgentResourceStore, InMemoryAgentResourceStore>();
+    builder.Services.AddSingleton<ISessionResourceStore, InMemorySessionResourceStore>();
 
     builder.Logging.AddConsole();
     builder.Logging.SetMinimumLevel(LogLevel.Debug);
@@ -94,6 +97,18 @@ else
         var logger = sp.GetRequiredService<ILogger<CosmosToolResourceStore>>();
         return new CosmosToolResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "ToolContainer", logger);
     });
+
+    builder.Services.AddSingleton<IAgentResourceStore>(sp =>
+    {
+        var logger = sp.GetRequiredService<ILogger<CosmosAgentResourceStore>>();
+        return new CosmosAgentResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "AgentContainer", logger);
+    });
+
+    builder.Services.AddSingleton<ISessionResourceStore>(sp =>
+    {
+        var logger = sp.GetRequiredService<ILogger<CosmosSessionResourceStore>>();
+        return new CosmosSessionResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "SessionContainer", logger);
+    });
     
     builder.Services.AddCosmosCache(options =>
     {
@@ -117,7 +132,25 @@ builder.Services.AddSingleton<IAdapterDeploymentManager>(c =>
 });
 builder.Services.AddSingleton<IAdapterManagementService, AdapterManagementService>();
 builder.Services.AddSingleton<IToolManagementService, ToolManagementService>();
+builder.Services.AddSingleton<IAgentManagementService, AgentManagementService>();
+builder.Services.AddSingleton<ISessionManagementService, SessionManagementService>();
 builder.Services.AddSingleton<IAdapterRichResultProvider, AdapterRichResultProvider>();
+
+// Foundry chat client. Only registered when an endpoint is configured so that
+// dev / unit-test environments can run without it; SessionManagementService
+// gracefully leaves sessions in Pending when no client is wired up.
+var foundrySection = builder.Configuration.GetSection("FoundrySettings");
+if (!string.IsNullOrWhiteSpace(foundrySection["Endpoint"]))
+{
+    builder.Services.Configure<FoundrySettings>(foundrySection);
+    builder.Services.AddSingleton<Azure.Core.TokenCredential>(credential);
+    builder.Services.AddSingleton<IFoundryChatClient, FoundryChatClient>();
+    builder.Services.AddSingleton<BuiltinToolExecutor>();
+    builder.Services.AddSingleton<AgentToolRegistry>();
+    builder.Services.AddSingleton<AgentRunner>();
+    builder.Services.AddSingleton<Func<AgentRunner>>(sp => () => sp.GetRequiredService<AgentRunner>());
+    builder.Services.AddSingleton<SubAgentInvoker>();
+}
 
 builder.Services.AddAuthorization();
 builder.Services.AddControllers();

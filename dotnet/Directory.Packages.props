@@ -17,5 +17,8 @@
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageVersion Include="ModelContextProtocol" Version="0.4.0-preview.3" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="0.4.0-preview.3" />
+    <PackageVersion Include="Azure.AI.OpenAI" Version="2.1.0" />
+    <PackageVersion Include="Azure.Identity" Version="1.13.1" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="9.0.10" />
   </ItemGroup>
 </Project>
