@@ -36,9 +36,14 @@ namespace Microsoft.McpGateway.Management.Contracts
         public required string System { get; set; }
 
         /// <summary>
-        /// Names of tools the agent is allowed to call. Built-in tools use bare
-        /// names (e.g. "bash", "read", "write"); MCP-routed tools use the
-        /// "mcp:&lt;tool-name&gt;" prefix.
+        /// Names of tools the agent is allowed to call. Each entry must be
+        /// prefixed with one of:
+        /// <list type="bullet">
+        ///   <item><description><c>mcp:&lt;tool-name&gt;</c> — a tool registered via <c>/tools</c>.</description></item>
+        ///   <item><description><c>agent:&lt;agent-name&gt;</c> — a peer agent invoked as a subagent.</description></item>
+        ///   <item><description><c>builtin:&lt;name&gt;</c> — in-process built-in (e.g. <c>builtin:bash</c>, <c>builtin:read_file</c>, <c>builtin:write_file</c>).</description></item>
+        /// </list>
+        /// Unprefixed entries are skipped at resolution time.
         /// </summary>
         [JsonPropertyOrder(4)]
         public IList<string> Tools { get; set; } = [];

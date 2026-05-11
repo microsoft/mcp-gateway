@@ -230,6 +230,13 @@ namespace Microsoft.McpGateway.Management.Foundry
             {
                 return Error($"Content too large ({byteCount} bytes; max {MaxFileBytes}).");
             }
+            // Validate the path BEFORE charging the quota so a malformed/unsafe
+            // path can't push the running total up and starve subsequent writes.
+            var (full, pathError) = ResolvePath(cwd, pathProp.GetString() ?? string.Empty);
+            if (pathError != null)
+            {
+                return Error(pathError);
+            }
             // Soft disk quota: track total bytes written per session.
             var quotaKey = cwd;
             var newTotal = _sessionBytesWritten.AddOrUpdate(quotaKey, byteCount, (_, prev) => prev + byteCount);
@@ -239,11 +246,7 @@ namespace Microsoft.McpGateway.Management.Foundry
                 _sessionBytesWritten.AddOrUpdate(quotaKey, 0, (_, prev) => Math.Max(0, prev - byteCount));
                 return Error($"Session disk quota exceeded ({newTotal} bytes; max {DefaultSessionDiskQuotaBytes}).");
             }
-            var (full, pathError) = ResolvePath(cwd, pathProp.GetString() ?? string.Empty);
-            if (pathError != null)
-            {
-                return Error(pathError);
-            }
+            bool committed = false;
             try
             {
                 var dir = Path.GetDirectoryName(full);
@@ -252,6 +255,7 @@ namespace Microsoft.McpGateway.Management.Foundry
                     Directory.CreateDirectory(dir);
                 }
                 File.WriteAllText(full, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                committed = true;
                 var info = new FileInfo(full);
                 return new ToolResult(JsonSerializer.Serialize(new { path = Path.GetRelativePath(cwd, full), bytesWritten = info.Length }), IsError: false);
             }
@@ -259,6 +263,30 @@ namespace Microsoft.McpGateway.Management.Foundry
             {
                 return Error($"Write failed: {ex.Message}");
             }
+            finally
+            {
+                // If the write threw before completing, refund the quota so the
+                // failure doesn't permanently consume the session's budget.
+                if (!committed)
+                {
+                    _sessionBytesWritten.AddOrUpdate(quotaKey, 0, (_, prev) => Math.Max(0, prev - byteCount));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Drop any per-session bookkeeping (currently the disk-quota counter)
+        /// for the given working directory. Should be called when the owning
+        /// session is deleted so long-running pods don't accumulate orphaned
+        /// quota entries. Idempotent.
+        /// </summary>
+        public void ReleaseSession(string workingDirectory)
+        {
+            if (string.IsNullOrEmpty(workingDirectory))
+            {
+                return;
+            }
+            _sessionBytesWritten.TryRemove(workingDirectory, out _);
         }
 
         private static (string fullPath, string? error) ResolvePath(string cwd, string relative)

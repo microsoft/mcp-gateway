@@ -19,16 +19,28 @@ namespace Microsoft.McpGateway.Management.Service
     public class AgentManagementService : IAgentManagementService
     {
         private const string NamePattern = "^[a-z0-9-]+$";
+        // Mirrors Foundry.BuiltinToolExecutor.SupportedKinds ("builtin_<name>")
+        // but expressed as the public, prefixed AgentData.Tools form.
+        private static readonly HashSet<string> KnownBuiltins = new(StringComparer.Ordinal)
+        {
+            "builtin:bash",
+            "builtin:read_file",
+            "builtin:write_file",
+        };
+
         private readonly IAgentResourceStore _store;
+        private readonly IToolResourceStore _toolStore;
         private readonly IPermissionProvider _permissionProvider;
         private readonly ILogger _logger;
 
         public AgentManagementService(
             IAgentResourceStore store,
+            IToolResourceStore toolStore,
             IPermissionProvider permissionProvider,
             ILogger<AgentManagementService> logger)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
+            _toolStore = toolStore ?? throw new ArgumentNullException(nameof(toolStore));
             _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
@@ -47,6 +59,8 @@ namespace Microsoft.McpGateway.Management.Service
                 _logger.LogWarning("/agents/{name} already exists.", request.Name.Sanitize());
                 throw new ArgumentException("An agent with the same name already exists.");
             }
+
+            await ValidateToolReferencesAsync(accessContext, request, cancellationToken).ConfigureAwait(false);
 
             var agent = AgentResource.Create(request, accessContext.GetUserId()!, DateTimeOffset.UtcNow);
 
@@ -87,6 +101,8 @@ namespace Microsoft.McpGateway.Management.Service
             {
                 throw new ArgumentException("The agent does not allow change on the submitted field.");
             }
+
+            await ValidateToolReferencesAsync(accessContext, request, cancellationToken).ConfigureAwait(false);
 
             var updated = AgentResource.Create(request, existing.CreatedBy, existing.CreatedAt);
             await _store.UpsertAsync(updated, cancellationToken).ConfigureAwait(false);
@@ -142,6 +158,82 @@ namespace Microsoft.McpGateway.Management.Service
             var operationName = operation.ToString().ToLowerInvariant();
             _logger.LogWarning("User {userId} is denied {operation} access for agent {resourceId}.", accessContext.GetUserId(), operationName, resource.Name.Sanitize());
             throw new UnauthorizedAccessException("You do not have permission to perform the operation.");
+        }
+
+        /// <summary>
+        /// Validate every entry in <see cref="AgentData.Tools"/> at agent
+        /// create/update time so an agent can't be persisted with references
+        /// the caller cannot themselves invoke. Each entry must be one of:
+        /// <list type="bullet">
+        ///   <item><description><c>mcp:&lt;tool-name&gt;</c> — a tool registered via <c>/tools</c> that the caller has read access to.</description></item>
+        ///   <item><description><c>agent:&lt;agent-name&gt;</c> — a peer agent the caller has read access to.</description></item>
+        ///   <item><description><c>builtin:&lt;name&gt;</c> — one of the in-process built-ins (<c>bash</c>, <c>read_file</c>, <c>write_file</c>).</description></item>
+        /// </list>
+        /// Throws <see cref="ArgumentException"/> for unknown / unprefixed
+        /// names and missing references; throws
+        /// <see cref="UnauthorizedAccessException"/> when the caller lacks
+        /// read access on a referenced resource.
+        /// </summary>
+        private async Task ValidateToolReferencesAsync(ClaimsPrincipal accessContext, AgentData request, CancellationToken cancellationToken)
+        {
+            if (request.Tools == null || request.Tools.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var entry in request.Tools)
+            {
+                if (string.IsNullOrWhiteSpace(entry))
+                {
+                    throw new ArgumentException("Tool entries must be non-empty strings.");
+                }
+
+                var colon = entry.IndexOf(':');
+                if (colon <= 0 || colon == entry.Length - 1)
+                {
+                    throw new ArgumentException($"Tool entry '{entry}' is missing a recognized prefix (expected 'mcp:', 'agent:', or 'builtin:').");
+                }
+
+                var prefix = entry.Substring(0, colon);
+                var name = entry.Substring(colon + 1);
+
+                switch (prefix)
+                {
+                    case "mcp":
+                        var tool = await _toolStore.TryGetAsync(name, cancellationToken).ConfigureAwait(false)
+                            ?? throw new ArgumentException($"MCP tool '{name}' referenced by agent does not exist.");
+                        if (!await _permissionProvider.CheckAccessAsync(accessContext, tool, Operation.Read).ConfigureAwait(false))
+                        {
+                            _logger.LogWarning("User {userId} denied read access on tool {tool} while saving agent {agent}.", accessContext.GetUserId(), name.Sanitize(), request.Name.Sanitize());
+                            throw new UnauthorizedAccessException($"You do not have permission to reference tool '{name}'.");
+                        }
+                        break;
+
+                    case "agent":
+                        if (string.Equals(name, request.Name, StringComparison.Ordinal))
+                        {
+                            throw new ArgumentException($"Agent '{request.Name}' cannot reference itself as a subagent.");
+                        }
+                        var peer = await _store.TryGetAsync(name, cancellationToken).ConfigureAwait(false)
+                            ?? throw new ArgumentException($"Peer agent '{name}' referenced by agent does not exist.");
+                        if (!await _permissionProvider.CheckAccessAsync(accessContext, peer, Operation.Read).ConfigureAwait(false))
+                        {
+                            _logger.LogWarning("User {userId} denied read access on peer agent {peer} while saving agent {agent}.", accessContext.GetUserId(), name.Sanitize(), request.Name.Sanitize());
+                            throw new UnauthorizedAccessException($"You do not have permission to reference agent '{name}'.");
+                        }
+                        break;
+
+                    case "builtin":
+                        if (!KnownBuiltins.Contains(entry))
+                        {
+                            throw new ArgumentException($"Unknown built-in tool '{entry}'. Supported: {string.Join(", ", KnownBuiltins)}.");
+                        }
+                        break;
+
+                    default:
+                        throw new ArgumentException($"Tool entry '{entry}' uses an unrecognized prefix '{prefix}:' (expected 'mcp:', 'agent:', or 'builtin:').");
+                }
+            }
         }
     }
 }

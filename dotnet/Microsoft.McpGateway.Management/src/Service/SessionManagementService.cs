@@ -14,9 +14,11 @@ using Microsoft.McpGateway.Management.Store;
 namespace Microsoft.McpGateway.Management.Service
 {
     /// <summary>
-    /// Service for managing sessions. Phase 2: pure metadata + agent snapshot,
-    /// plus an in-process fire-and-forget LLM call that writes the result back
-    /// to the session record. No worker pod, no agent loop, no tools yet.
+    /// Service for managing sessions. Drives an <see cref="AgentRunner"/>
+    /// (LLM + tool calls + SSE event stream) and persists per-session state
+    /// (status, messages, working directory) in the session store.
+    /// Streaming requires <see cref="AgentRunner"/> to be registered, which
+    /// happens only when <c>FoundrySettings:Endpoint</c> is configured.
     /// </summary>
     public class SessionManagementService : ISessionManagementService
     {
@@ -24,6 +26,7 @@ namespace Microsoft.McpGateway.Management.Service
         private readonly IAgentResourceStore _agentStore;
         private readonly IPermissionProvider _permissionProvider;
         private readonly AgentRunner? _agentRunner;
+        private readonly BuiltinToolExecutor? _builtinExecutor;
         private readonly ILogger _logger;
 
         public SessionManagementService(
@@ -31,13 +34,15 @@ namespace Microsoft.McpGateway.Management.Service
             IAgentResourceStore agentStore,
             IPermissionProvider permissionProvider,
             ILogger<SessionManagementService> logger,
-            AgentRunner? agentRunner = null)
+            AgentRunner? agentRunner = null,
+            BuiltinToolExecutor? builtinExecutor = null)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _agentStore = agentStore ?? throw new ArgumentNullException(nameof(agentStore));
             _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _agentRunner = agentRunner;
+            _builtinExecutor = builtinExecutor;
         }
 
         public async Task<SessionResource> CreateAsync(ClaimsPrincipal accessContext, SessionData request, CancellationToken cancellationToken)
@@ -157,30 +162,70 @@ namespace Microsoft.McpGateway.Management.Service
             _logger.LogInformation("Streaming run for /sessions/{id} on agent {agent}.", session.Id, agent.Name.Sanitize());
             await _store.UpsertAsync(session, cancellationToken).ConfigureAwait(false);
 
-            await foreach (var evt in _agentRunner.RunStreamingAsync(
+            var enumerator = _agentRunner.RunStreamingAsync(
                 agent,
                 session.Input,
                 session.Id,
                 parentSessionId: session.ParentSessionId,
                 history: session.Messages,
                 workingDirectory: session.WorkingDirectory,
-                cancellationToken).ConfigureAwait(false))
+                cancellationToken).GetAsyncEnumerator(cancellationToken);
+            try
             {
-                if (evt.Type == SessionEventType.Completed)
+                while (true)
                 {
-                    session.Status = SessionStatus.Completed;
-                    session.Result = evt.Answer;
-                    session.LastUpdatedAt = DateTimeOffset.UtcNow;
-                    await _store.UpsertAsync(session, CancellationToken.None).ConfigureAwait(false);
+                    SessionEvent evt;
+                    try
+                    {
+                        if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+                        {
+                            break;
+                        }
+                        evt = enumerator.Current;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Client disconnected or cancellation token tripped before
+                        // the runner could emit Completed/Failed. Persist a terminal
+                        // status so the session record doesn't stay stuck on Running.
+                        await PersistTerminalStatusAsync(session, SessionStatus.Cancelled, error: "Run cancelled before completion.").ConfigureAwait(false);
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Streaming run for session {id} faulted.", session.Id);
+                        await PersistTerminalStatusAsync(session, SessionStatus.Failed, error: ex.Message).ConfigureAwait(false);
+                        throw;
+                    }
+
+                    if (evt.Type == SessionEventType.Completed)
+                    {
+                        session.Status = SessionStatus.Completed;
+                        session.Result = evt.Answer;
+                        session.LastUpdatedAt = DateTimeOffset.UtcNow;
+                        await _store.UpsertAsync(session, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    else if (evt.Type == SessionEventType.Failed)
+                    {
+                        session.Status = SessionStatus.Failed;
+                        session.Error = evt.Error;
+                        session.LastUpdatedAt = DateTimeOffset.UtcNow;
+                        await _store.UpsertAsync(session, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    yield return evt;
                 }
-                else if (evt.Type == SessionEventType.Failed)
+
+                // If the runner completed without ever emitting a terminal
+                // event (defensive; AgentRunner contract says it always does),
+                // mark the session Completed so it doesn't stay Running.
+                if (session.Status == SessionStatus.Running)
                 {
-                    session.Status = SessionStatus.Failed;
-                    session.Error = evt.Error;
-                    session.LastUpdatedAt = DateTimeOffset.UtcNow;
-                    await _store.UpsertAsync(session, CancellationToken.None).ConfigureAwait(false);
+                    await PersistTerminalStatusAsync(session, SessionStatus.Completed, error: null).ConfigureAwait(false);
                 }
-                yield return evt;
+            }
+            finally
+            {
+                await enumerator.DisposeAsync().ConfigureAwait(false);
             }
         }
 
@@ -213,7 +258,7 @@ namespace Microsoft.McpGateway.Management.Service
             _logger.LogInformation("Continuing /sessions/{id} with new user message ({len} chars, {prior} prior messages).",
                 session.Id, userInput.Length, priorHistory.Count);
 
-            await foreach (var evt in _agentRunner.RunStreamingAsync(
+            var enumerator = _agentRunner.RunStreamingAsync(
                 session.AgentSnapshot,
                 userInput,
                 session.Id,
@@ -221,23 +266,79 @@ namespace Microsoft.McpGateway.Management.Service
                 history: session.Messages,
                 workingDirectory: session.WorkingDirectory,
                 cancellationToken,
-                priorHistory: priorHistory).ConfigureAwait(false))
+                priorHistory: priorHistory).GetAsyncEnumerator(cancellationToken);
+            try
             {
-                if (evt.Type == SessionEventType.Completed)
+                while (true)
                 {
-                    session.Status = SessionStatus.Completed;
-                    session.Result = evt.Answer;
-                    session.LastUpdatedAt = DateTimeOffset.UtcNow;
-                    await _store.UpsertAsync(session, CancellationToken.None).ConfigureAwait(false);
+                    SessionEvent evt;
+                    try
+                    {
+                        if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+                        {
+                            break;
+                        }
+                        evt = enumerator.Current;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        await PersistTerminalStatusAsync(session, SessionStatus.Cancelled, error: "Run cancelled before completion.").ConfigureAwait(false);
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Continuing session {id} faulted.", session.Id);
+                        await PersistTerminalStatusAsync(session, SessionStatus.Failed, error: ex.Message).ConfigureAwait(false);
+                        throw;
+                    }
+
+                    if (evt.Type == SessionEventType.Completed)
+                    {
+                        session.Status = SessionStatus.Completed;
+                        session.Result = evt.Answer;
+                        session.LastUpdatedAt = DateTimeOffset.UtcNow;
+                        await _store.UpsertAsync(session, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    else if (evt.Type == SessionEventType.Failed)
+                    {
+                        session.Status = SessionStatus.Failed;
+                        session.Error = evt.Error;
+                        session.LastUpdatedAt = DateTimeOffset.UtcNow;
+                        await _store.UpsertAsync(session, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    yield return evt;
                 }
-                else if (evt.Type == SessionEventType.Failed)
+
+                if (session.Status == SessionStatus.Running)
                 {
-                    session.Status = SessionStatus.Failed;
-                    session.Error = evt.Error;
-                    session.LastUpdatedAt = DateTimeOffset.UtcNow;
-                    await _store.UpsertAsync(session, CancellationToken.None).ConfigureAwait(false);
+                    await PersistTerminalStatusAsync(session, SessionStatus.Completed, error: null).ConfigureAwait(false);
                 }
-                yield return evt;
+            }
+            finally
+            {
+                await enumerator.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Best-effort persistence of a terminal session state. Swallows store
+        /// errors so the original cancellation / exception flow isn't masked.
+        /// </summary>
+        private async Task PersistTerminalStatusAsync(SessionResource session, SessionStatus status, string? error)
+        {
+            try
+            {
+                session.Status = status;
+                if (error != null)
+                {
+                    session.Error = error;
+                }
+                session.LastUpdatedAt = DateTimeOffset.UtcNow;
+                await _store.UpsertAsync(session, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to persist terminal status {status} for session {id}.", status, session.Id);
             }
         }
 
@@ -268,6 +369,25 @@ namespace Microsoft.McpGateway.Management.Service
 
             await EnsureAccessAsync(accessContext, existing, Operation.Write).ConfigureAwait(false);
             await _store.DeleteAsync(id, cancellationToken).ConfigureAwait(false);
+
+            // Release per-session quota bookkeeping and best-effort scrub the
+            // session's working directory so long-lived pods don't accumulate
+            // orphaned counters or temp files.
+            if (!string.IsNullOrEmpty(existing.WorkingDirectory))
+            {
+                _builtinExecutor?.ReleaseSession(existing.WorkingDirectory);
+                try
+                {
+                    if (Directory.Exists(existing.WorkingDirectory))
+                    {
+                        Directory.Delete(existing.WorkingDirectory, recursive: true);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to delete working directory for session {id}.", id.Sanitize());
+                }
+            }
         }
 
         public async Task<IEnumerable<SessionResource>> ListAsync(ClaimsPrincipal accessContext, CancellationToken cancellationToken)

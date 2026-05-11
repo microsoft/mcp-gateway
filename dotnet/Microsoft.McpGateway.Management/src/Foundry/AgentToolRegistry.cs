@@ -19,7 +19,8 @@ namespace Microsoft.McpGateway.Management.Foundry
         // Tool names in AgentData are namespaced by prefix:
         //   "mcp:<name>"     → routed to an MCP tool pod
         //   "agent:<name>"   → spawn a child session against a peer agent (subagent / Task pattern)
-        //   "builtin:<name>" → reserved for in-process built-ins (bash/read/write); not yet implemented
+        //   "builtin:<name>" → in-process built-ins implemented by BuiltinToolExecutor
+        //                      (currently bash / read_file / write_file)
         // Unknown / unprefixed names are skipped with a log entry.
         private const string McpPrefix = "mcp:";
         private const string AgentPrefix = "agent:";

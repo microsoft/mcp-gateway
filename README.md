@@ -201,7 +201,7 @@ The MCP Gateway now supports **tool registration** with dynamic routing capabili
 
 > **Preview / single-replica.** This subsystem is opt-in and intended for evaluation and single-pod deployments. Built-in tools execute in-process inside the gateway pod, and per-session state (working directory, disk-quota counters) is local to that pod. Do not enable this in a multi-replica or multi-tenant production deployment without adding an out-of-process sandbox and shared session storage.
 
-The gateway can optionally run LLM-driven *agents* that call registered MCP tools and a small set of built-in tools (`bash`, `read_file`, `write_file`). The feature is **disabled by default** and is only registered when `FoundrySettings:Endpoint` is set in configuration; without it the `/agents` and `/sessions` endpoints return 404 / 503 and the rest of the gateway is unaffected.
+The gateway can optionally run LLM-driven *agents* that call registered MCP tools and a small set of built-in tools (`builtin:bash`, `builtin:read_file`, `builtin:write_file`). The agent CRUD endpoints (`/agents`, `/sessions` GET/DELETE/LIST) are always available, but **streaming session execution** (`POST /sessions/run`, `POST /sessions/{id}/messages`) is only enabled when `FoundrySettings:Endpoint` is configured. Without it, a streaming request fails fast with an `error` SSE event saying that Foundry must be configured.
 
 #### Enabling
 
@@ -235,7 +235,12 @@ Content-Type: application/json
 }
 ```
 
-`tools` entries are either bare built-in names (`bash`, `read`, `write`) or `mcp:<tool-name>` for tools registered via `/tools`.
+`tools` entries are namespaced by prefix:
+- `mcp:<tool-name>` — routes to a tool registered via `/tools`.
+- `agent:<agent-name>` — delegates to another agent (subagent / Task pattern).
+- `builtin:bash`, `builtin:read_file`, `builtin:write_file` — in-process built-ins (see *Built-in tools and limits* below).
+
+Referenced `mcp:` and `agent:` resources are validated at agent create/update time: the call fails if the resource does not exist or the caller lacks read access, so an agent can never reference tools or peer agents the creator could not invoke directly.
 
 #### Running a session
 
@@ -249,7 +254,7 @@ Accept: text/event-stream
 { "agentName": "weather-helper", "input": "What's the weather in Seattle?" }
 ```
 
-The response is a Server-Sent Events stream; each event is `event: <type>\ndata: <json>\n\n`. Event types include `Started`, `ToolCallRequested`, `ToolCallCompleted`, `TokenDelta`, and `Completed`.
+The response is a Server-Sent Events stream; each event is `event: <type>\ndata: <json>\n\n`. Event types include `Started`, `ToolCallStarted`, `ToolCallCompleted`, `TokenDelta`, `Completed`, and `Failed`.
 
 To continue an existing session with a follow-up message:
 
@@ -262,7 +267,7 @@ Content-Type: application/json
 
 #### Built-in tools and limits
 
-When an agent lists `bash` / `read` / `write` in its `tools`, those built-ins run **in the gateway pod** under a per-session working directory. They are guarded by:
+When an agent lists `builtin:bash` / `builtin:read_file` / `builtin:write_file` in its `tools`, those built-ins run **in the gateway pod** under a per-session working directory. They are guarded by:
 
 - A regex denylist for clearly dangerous shell operations (`sudo`, network egress, mounts, package managers, etc.). This is *defense-in-depth*, not a sandbox.
 - 30s default / 120s max bash timeout; 16 KiB output cap per stream; 256 KiB max file size; 4 MiB total writes per session.
