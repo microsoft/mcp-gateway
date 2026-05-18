@@ -26,6 +26,7 @@ This project provides:
 - **Tools**: Registered resources with MCP tool definitions that can be dynamically routed via the tool gateway router. Each tool includes metadata about its execution endpoint and input schema.
 - **Tool Gateway Router**: An MCP server that acts as an intelligent router, directing tool execution requests to the appropriate registered tool servers based on tool definitions. Multiple router instances may run behind the gateway for session affinity.
 - **Session-Aware Stateful Routing**: Ensures that all requests with a given `session_id` are consistently routed to the same MCP server instance.
+- **Agents & Sessions (Preview)**: Optional, opt-in resources for running LLM-driven agents on top of registered MCP tools. *Agents* are metadata (system prompt + model + allowed tool list); *Sessions* are individual runs that stream events over Server-Sent Events. Disabled unless `FoundrySettings:Endpoint` is configured.
 
 ## Architecture
 
@@ -138,6 +139,15 @@ flowchart LR
 - `PUT /tools/{name}` — Update a tool deployment and definition.
 - `DELETE /tools/{name}` — Remove a registered tool.
 
+#### Agent and Session Management (Preview, opt-in)
+
+Available only when `FoundrySettings:Endpoint` is configured. See [Agents and Sessions](#agents-and-sessions-preview) below for details.
+
+- `POST /agents`, `GET /agents`, `GET|PUT|DELETE /agents/{name}` — CRUD for agent definitions.
+- `POST /sessions`, `GET /sessions`, `GET|DELETE /sessions/{id}` — CRUD for sessions.
+- `POST /sessions/run` — Start a session and stream events (SSE).
+- `POST /sessions/{id}/messages` — Continue an existing session with a new user message; streams events (SSE).
+
 ### Data Plane – Gateway Routing for MCP Servers
 
 #### Direct MCP Server Access
@@ -186,6 +196,84 @@ The MCP Gateway now supports **tool registration** with dynamic routing capabili
    - The router analyzes the tool call in the request
    - Based on the tool definition, it forwards the execution to the correct registered tool server
    - Results are returned through the router back to the client
+
+### Agents and Sessions (Preview)
+
+> **Preview / single-replica.** This subsystem is opt-in and intended for evaluation and single-pod deployments. Built-in tools execute in-process inside the gateway pod, and per-session state (working directory, disk-quota counters) is local to that pod. Do not enable this in a multi-replica or multi-tenant production deployment without adding an out-of-process sandbox and shared session storage.
+
+The gateway can optionally run LLM-driven *agents* that call registered MCP tools and a small set of built-in tools (`builtin:bash`, `builtin:read_file`, `builtin:write_file`). The agent CRUD endpoints (`/agents`, `/sessions` GET/DELETE/LIST) are always available, but **streaming session execution** (`POST /sessions/run`, `POST /sessions/{id}/messages`) is only enabled when `FoundrySettings:Endpoint` is configured. Without it, a streaming request fails fast with an `error` SSE event saying that Foundry must be configured.
+
+#### Enabling
+
+Add a `FoundrySettings` section to `appsettings.json` (or supply via environment variables):
+
+```json
+{
+  "FoundrySettings": {
+    "Endpoint": "https://<your-resource>.cognitiveservices.azure.com/",
+    "DeploymentName": "gpt-4o"
+  }
+}
+```
+
+Authentication uses `DefaultAzureCredential`; grant the gateway's identity (managed identity in AKS, or your local user via `az login`) the *Cognitive Services User* role on the target resource. Tool-emitting models are required for any agent with a non-empty `tools` array — `gpt-4o`-class deployments are recommended.
+
+#### Defining an agent
+
+```http
+POST /agents
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+```json
+{
+  "name": "weather-helper",
+  "model": "gpt-4o",
+  "system": "You answer weather questions concisely.",
+  "tools": ["mcp:weather"],
+  "description": "Demo agent backed by the weather MCP tool."
+}
+```
+
+`tools` entries are namespaced by prefix:
+- `mcp:<tool-name>` — routes to a tool registered via `/tools`.
+- `agent:<agent-name>` — delegates to another agent (subagent / Task pattern).
+- `builtin:bash`, `builtin:read_file`, `builtin:write_file` — in-process built-ins (see *Built-in tools and limits* below).
+
+Referenced `mcp:` and `agent:` resources are validated at agent create/update time: the call fails if the resource does not exist or the caller lacks read access, so an agent can never reference tools or peer agents the creator could not invoke directly.
+
+#### Running a session
+
+```http
+POST /sessions/run
+Authorization: Bearer <token>
+Content-Type: application/json
+Accept: text/event-stream
+```
+```json
+{ "agentName": "weather-helper", "input": "What's the weather in Seattle?" }
+```
+
+The response is a Server-Sent Events stream; each event is `event: <type>\ndata: <json>\n\n`. Event types include `Started`, `ToolCallStarted`, `ToolCallCompleted`, `TokenDelta`, `Completed`, and `Failed`.
+
+To continue an existing session with a follow-up message:
+
+```http
+POST /sessions/{id}/messages
+Content-Type: application/json
+
+{ "input": "And in Portland?" }
+```
+
+#### Built-in tools and limits
+
+When an agent lists `builtin:bash` / `builtin:read_file` / `builtin:write_file` in its `tools`, those built-ins run **in the gateway pod** under a per-session working directory. They are guarded by:
+
+- A regex denylist for clearly dangerous shell operations (`sudo`, network egress, mounts, package managers, etc.). This is *defense-in-depth*, not a sandbox.
+- 30s default / 120s max bash timeout; 16 KiB output cap per stream; 256 KiB max file size; 4 MiB total writes per session.
+- Path resolution rejects absolute paths and `..` traversal.
+
+For multi-tenant or production use, replace these with a real per-session sandbox (e.g. ephemeral pod, gVisor, firejail) — see the inline comments in `BuiltinToolExecutor.cs`.
 
 ## Getting Started - Local Deployment
 
