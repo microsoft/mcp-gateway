@@ -104,6 +104,58 @@ namespace Microsoft.McpGateway.Management.Tests
                 .WithMessage("The tool with the same name already exists.");
         }
 
+        [DataTestMethod]
+        [DataRow(0)]
+        [DataRow(-1)]
+        [DataRow(65536)]
+        [DataRow(int.MaxValue)]
+        public async Task CreateAsync_ShouldThrowArgumentException_WhenPortIsOutOfRange(int port)
+        {
+            var request = CreateToolData("port-tool", "image", "v1");
+            request.ToolDefinition.Port = port;
+
+            Func<Task> act = () => _service.CreateAsync(_accessContext, request, CancellationToken.None);
+
+            await act.Should().ThrowAsync<ArgumentException>()
+                .WithMessage("Port must be between 1 and 65535.");
+            _deploymentManagerMock.Verify(x => x.CreateDeploymentAsync(It.IsAny<AdapterData>(), It.IsAny<ResourceType>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [DataTestMethod]
+        [DataRow("")]
+        [DataRow("score")]                                  // missing leading '/'
+        [DataRow("/@169.254.169.254/metadata")]             // URI authority injection attempt
+        [DataRow("/path with space")]
+        [DataRow("/path?query=1")]
+        [DataRow("/path#fragment")]
+        [DataRow("/path:8080/x")]                           // ':' could shift port interpretation
+        public async Task CreateAsync_ShouldThrowArgumentException_WhenPathIsInvalid(string path)
+        {
+            var request = CreateToolData("path-tool", "image", "v1");
+            request.ToolDefinition.Path = path;
+
+            Func<Task> act = () => _service.CreateAsync(_accessContext, request, CancellationToken.None);
+
+            await act.Should().ThrowAsync<ArgumentException>()
+                .WithMessage("Path must start with '/' and contain only alphanumeric characters, slashes, dashes, underscores, and dots.");
+            _deploymentManagerMock.Verify(x => x.CreateDeploymentAsync(It.IsAny<AdapterData>(), It.IsAny<ResourceType>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [TestMethod]
+        public async Task UpdateAsync_ShouldThrowArgumentException_WhenPathIsInvalid()
+        {
+            var existing = ToolResource.Create(CreateToolData("tool1", "image", "v1"), "user1", DateTimeOffset.UtcNow);
+            var request = CreateToolData("tool1", "image", "v1");
+            request.ToolDefinition.Path = "/@evil.example.com/";
+            _storeMock.Setup(x => x.TryGetAsync("tool1", It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+
+            Func<Task> act = () => _service.UpdateAsync(_accessContext, request, CancellationToken.None);
+
+            await act.Should().ThrowAsync<ArgumentException>()
+                .WithMessage("Path must start with '/' and contain only alphanumeric characters, slashes, dashes, underscores, and dots.");
+            _deploymentManagerMock.Verify(x => x.UpdateDeploymentAsync(It.IsAny<AdapterData>(), It.IsAny<ResourceType>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
         [TestMethod]
         public async Task CreateAsync_ShouldThrowArgumentNullException_WhenAccessContextIsNull()
         {

@@ -85,9 +85,18 @@ namespace Microsoft.McpGateway.Tools.Services
                 // Refresh provider cache for subsequent list requests
                 _ = await this.toolDefinitionProvider.GetToolDefinitionAsync(toolName, cancellationToken).ConfigureAwait(false);
 
-                // Compose the execution endpoint URL
-                // Format: http://{toolName}-service.adapter.svc.cluster.local:{port}{path}
-                var executionEndpoint = $"http://{toolName}-service.adapter.svc.cluster.local:{toolDefinition.Port}{toolDefinition.Path}";
+                // Compose the execution endpoint URL using UriBuilder. Building the URI from
+                // discrete components (rather than string-interpolating the configured path)
+                // prevents URI authority injection — e.g. a path beginning with "@" cannot be
+                // reinterpreted as user-info that overrides the cluster-internal host. The path
+                // is additionally validated at registration time in ToolManagementService.
+                var host = $"{toolName}-service.adapter.svc.cluster.local";
+                var uriBuilder = new UriBuilder(
+                    Uri.UriSchemeHttp,
+                    host,
+                    toolDefinition.Port,
+                    toolDefinition.Path ?? "/");
+                var executionEndpoint = uriBuilder.Uri;
 
                 this.logger.LogInformation(
                     "Forwarding tool {ToolName} to endpoint: {Endpoint}",

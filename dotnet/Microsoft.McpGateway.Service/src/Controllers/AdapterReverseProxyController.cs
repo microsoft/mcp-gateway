@@ -60,7 +60,28 @@ namespace Microsoft.McpGateway.Service.Controllers
             {
                 sessionId = AdapterSessionRoutingHandler.GetSessionId(response);
                 if (!string.IsNullOrEmpty(sessionId))
-                    await sessionStore.SetAsync(sessionId, targetAddress, cancellationToken).ConfigureAwait(false);
+                {
+                    // The session id is supplied by the downstream adapter, which is not fully
+                    // trusted. Validate its shape before persisting; a malicious adapter could
+                    // otherwise return a crafted value that pollutes another user's scoped key
+                    // or breaks routing semantics.
+                    if (!AdapterSessionRoutingHandler.IsValidSessionId(sessionId))
+                    {
+                        logger.LogWarning("Downstream adapter returned an invalid session id for adapter {adapterName}.", (name ?? ToolGateway).Sanitize());
+
+                        // Drop the invalid value from the proxied response so clients cannot
+                        // cache or replay it — there is no scoped-key entry it could ever
+                        // resolve to, and forwarding it would create a confusing handle.
+                        response.Headers.Remove("mcp-session-id");
+                    }
+                    else
+                    {
+                        // Bind the session to the authenticated user so subsequent lookups
+                        // require both the session id and the same user identity.
+                        var scopedKey = AdapterSessionRoutingHandler.BuildScopedSessionKey(HttpContext, sessionId);
+                        await sessionStore.SetAsync(scopedKey, targetAddress, cancellationToken).ConfigureAwait(false);
+                    }
+                }
             }
 
             await HttpProxy.CopyProxiedHttpResponseAsync(HttpContext, response, cancellationToken).ConfigureAwait(false);
