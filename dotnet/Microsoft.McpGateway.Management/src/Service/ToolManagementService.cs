@@ -20,6 +20,13 @@ namespace Microsoft.McpGateway.Management.Service
     public class ToolManagementService : IToolManagementService
     {
         private const string NamePattern = "^[a-z0-9-]+$";
+
+        // Path may only contain a leading '/' followed by alphanumeric characters, slashes,
+        // dashes, underscores, and dots. This intentionally excludes characters that could be
+        // used to inject URI authority or query/fragment components (e.g. '@', '?', '#', ':',
+        // '\\', whitespace) when the path is later concatenated into a URL.
+        private static readonly Regex PathPattern = new(@"^/[a-zA-Z0-9/_\-\.]*$", RegexOptions.Compiled);
+
         private readonly IAdapterDeploymentManager _deploymentManager;
         private readonly IToolResourceStore _store;
         private readonly IPermissionProvider _permissionProvider;
@@ -44,6 +51,8 @@ namespace Microsoft.McpGateway.Management.Service
 
             if (!Regex.IsMatch(request.Name, NamePattern))
                 throw new ArgumentException("Name must contain only lowercase letters, numbers, and dashes.");
+
+            ValidateToolDefinition(request.ToolDefinition);
 
             var existing = await _store.TryGetAsync(request.Name, cancellationToken).ConfigureAwait(false);
             if (existing != null)
@@ -89,6 +98,8 @@ namespace Microsoft.McpGateway.Management.Service
             ArgumentNullException.ThrowIfNull(request);
 
             _logger.LogInformation("Start updating /tools/{name}.", request.Name.Sanitize());
+
+            ValidateToolDefinition(request.ToolDefinition);
 
             var existing = await _store.TryGetAsync(request.Name, cancellationToken).ConfigureAwait(false)
                 ?? throw new ArgumentException("The tool does not exist and cannot be updated.");
@@ -151,6 +162,23 @@ namespace Microsoft.McpGateway.Management.Service
             }
 
             return allowedResources;
+        }
+
+        /// <summary>
+        /// Validates the supplied <see cref="ToolDefinition"/> to ensure the port and path values
+        /// cannot be abused to perform Server-Side Request Forgery (SSRF) against cluster-internal
+        /// services. The path is constrained to a strict allowlist to prevent URI authority
+        /// injection (e.g. paths containing '@' that would otherwise reinterpret the host).
+        /// </summary>
+        private static void ValidateToolDefinition(ToolDefinition toolDefinition)
+        {
+            ArgumentNullException.ThrowIfNull(toolDefinition);
+
+            if (toolDefinition.Port < 1 || toolDefinition.Port > 65535)
+                throw new ArgumentException("Port must be between 1 and 65535.");
+
+            if (string.IsNullOrEmpty(toolDefinition.Path) || !PathPattern.IsMatch(toolDefinition.Path))
+                throw new ArgumentException("Path must start with '/' and contain only alphanumeric characters, slashes, dashes, underscores, and dots.");
         }
 
         private async Task EnsureAccessAsync(ClaimsPrincipal accessContext, ToolResource resource, Operation operation)
