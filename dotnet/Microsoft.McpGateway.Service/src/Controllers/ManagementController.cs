@@ -1,6 +1,7 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using k8s.Autorest;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.McpGateway.Management.Contracts;
@@ -82,6 +83,14 @@ namespace Microsoft.McpGateway.Service.Controllers
             catch (UnauthorizedAccessException)
             {
                 return Forbid();
+            }
+            // The k8s API returns 400 BadRequest while the pod is still ContainerCreating
+            // or before the container has produced any output. Surface that as a 200 with
+            // a placeholder string so the portal log panel can render gracefully instead
+            // of bubbling a 500 up to the user immediately after creating an adapter.
+            catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.BadRequest)
+            {
+                return Ok($"Logs are not yet available for instance {instance} (pod is starting). Try again in a few seconds.");
             }
         }
 
