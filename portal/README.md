@@ -44,8 +44,9 @@ npm install
 npm run dev
 ```
 
-Then open <http://localhost:5173>. Vite proxies `/adapters`, `/tools`,
-`/agents`, `/sessions`, `/mcp`, `/portal/config`, and `/ping` to
+Then open <http://localhost:5173/portal/> (the app uses a `/portal` router
+basename, so the root path renders a blank page). Vite proxies `/adapters`,
+`/tools`, `/agents`, `/sessions`, `/mcp`, `/portal/config`, and `/ping` to
 `http://localhost:8000` so the SPA shares an origin with the gateway. Override
 the target with `VITE_GATEWAY_URL=http://example:8000 npm run dev`.
 

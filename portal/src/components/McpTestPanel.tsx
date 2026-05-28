@@ -142,6 +142,13 @@ interface Props {
    * (`POST /mcp`).
    */
   resourceName?: string;
+  /**
+   * When set, the panel auto-selects this tool (instead of the first one
+   * returned by `tools/list`) after connecting. Used by the tool detail page
+   * so Run exercises the tool shown in the header rather than whichever tool
+   * happens to come back first from the dynamic router.
+   */
+  pinnedTool?: string;
 }
 
 interface McpTool {
@@ -192,7 +199,7 @@ let counter = 0;
  * tool's JSON Schema. The full JSON-RPC sandbox is still available under the
  * Advanced section for power users.
  */
-export function McpTestPanel({ resourceName }: Props) {
+export function McpTestPanel({ resourceName, pinnedTool }: Props) {
   const styles = useStyles();
   const { api } = useGateway();
 
@@ -297,11 +304,15 @@ export function McpTestPanel({ resourceName }: Props) {
         | undefined;
       const fetched = listResult?.tools ?? [];
       setTools(fetched);
-      // Auto-select the first tool so the user immediately sees a runnable form.
-      if (fetched.length > 0) {
-        const first = fetched[0];
-        setSelectedTool(first.name);
-        setToolArgs(defaultArgsFor(first.inputSchema));
+      // Prefer the pinned tool (tool detail page) so Run targets the tool the
+      // user is looking at; otherwise auto-select the first tool so the user
+      // immediately sees a runnable form.
+      const initial =
+        (pinnedTool ? fetched.find((t) => t.name === pinnedTool) : undefined) ??
+        fetched[0];
+      if (initial) {
+        setSelectedTool(initial.name);
+        setToolArgs(defaultArgsFor(initial.inputSchema));
       } else {
         setSelectedTool(undefined);
         setToolArgs({});

@@ -238,7 +238,7 @@ export function AdapterFormFields({
 
       <Field
         label="Required roles"
-        hint="App role values (Entra ID app roles, e.g. mcp.engineer) that grant read access. Leave empty to allow any authenticated user."
+        hint="App role values (Entra ID app roles, e.g. mcp.engineer) that grant read access. Leave empty to restrict visibility to the creator and admins only."
       >
         <div className={styles.rolesEditor}>
           {values.requiredRoles.length > 0 ? (
@@ -262,7 +262,8 @@ export function AdapterFormFields({
             </TagGroup>
           ) : (
             <Caption1 className={styles.rolesEmpty}>
-              No roles required — any authenticated user can read this resource.
+              No roles required — only the creator and admins can read this
+              resource.
             </Caption1>
           )}
           <div className={styles.rolesInputRow}>

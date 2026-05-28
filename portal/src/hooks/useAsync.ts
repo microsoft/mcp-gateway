@@ -11,6 +11,15 @@ export interface AsyncState<T> {
   reload: () => void;
 }
 
+export interface UseAsyncOptions {
+  /**
+   * When `false`, the factory is not invoked and the hook stays idle
+   * (no request, no loading state). Useful for data that should only load
+   * when a particular tab/panel is active. Defaults to `true`.
+   */
+  enabled?: boolean;
+}
+
 /**
  * Tiny `useAsync` so we don't pull a full data-fetching library for the few
  * places that need refresh-on-demand semantics. Cancels in-flight work when
@@ -19,10 +28,12 @@ export interface AsyncState<T> {
 export function useAsync<T>(
   factory: (signal: AbortSignal) => Promise<T>,
   deps: ReadonlyArray<unknown>,
+  options?: UseAsyncOptions,
 ): AsyncState<T> {
+  const enabled = options?.enabled ?? true;
   const [data, setData] = useState<T | undefined>(undefined);
   const [error, setError] = useState<Error | undefined>(undefined);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState<boolean>(enabled);
   const [tick, setTick] = useState(0);
   const factoryRef = useRef(factory);
   factoryRef.current = factory;
@@ -30,6 +41,11 @@ export function useAsync<T>(
   const reload = useCallback(() => setTick((n) => n + 1), []);
 
   useEffect(() => {
+    if (!enabled) {
+      // Skip the request entirely; clear any stale loading flag.
+      setLoading(false);
+      return;
+    }
     const ac = new AbortController();
     setLoading(true);
     setError(undefined);
@@ -47,7 +63,7 @@ export function useAsync<T>(
     );
     return () => ac.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, tick]);
+  }, [...deps, tick, enabled]);
 
   return { data, error, loading, reload };
 }

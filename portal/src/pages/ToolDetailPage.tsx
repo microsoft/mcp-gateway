@@ -142,7 +142,8 @@ export function ToolDetailPage() {
   );
   const logs = useAsync(
     (signal) => api.getToolLogs(name!, logInstance, signal),
-    [api, name, logInstance, tab === "logs"],
+    [api, name, logInstance],
+    { enabled: tab === "logs" },
   );
   const formattedLogs = useMemo(() => formatLogs(logs.data), [logs.data]);
 
@@ -325,7 +326,7 @@ export function ToolDetailPage() {
               <code>name: "{t.name}"</code> to exercise this tool end-to-end.
             </MessageBarBody>
           </MessageBar>
-          <McpTestPanel />
+          <McpTestPanel pinnedTool={t.name} />
         </>
       )}
 

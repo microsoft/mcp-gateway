@@ -148,7 +148,8 @@ export function AdapterDetailPage() {
   );
   const logs = useAsync(
     (signal) => api.getAdapterLogs(name!, logInstance, signal),
-    [api, name, logInstance, tab === "logs"],
+    [api, name, logInstance],
+    { enabled: tab === "logs" },
   );
   const formattedLogs = useMemo(() => formatLogs(logs.data), [logs.data]);
 
