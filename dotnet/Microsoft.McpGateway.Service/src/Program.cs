@@ -30,21 +30,62 @@ builder.Services.AddSingleton<IAdapterSessionStore, DistributedMemorySessionStor
 builder.Services.AddSingleton<IServiceNodeInfoProvider, AdapterKubernetesNodeInfoProvider>();
 builder.Services.AddSingleton<ISessionRoutingHandler, AdapterSessionRoutingHandler>();
 
-if (builder.Environment.IsDevelopment())
+// Operators can opt out of Entra ID and run the gateway with the dev auth
+// handler (X-Dev-* headers) by setting `Authentication__BypassEntra=true`
+// in the pod's environment. This is intended for restricted demo / e2e
+// clusters that aren't reachable from the public internet. Always-on in
+// Development as before.
+var bypassEntra = builder.Configuration.GetValue<bool>("Authentication:BypassEntra");
+var useDevAuth = builder.Environment.IsDevelopment() || bypassEntra;
+
+if (useDevAuth)
 {
+    if (bypassEntra && !builder.Environment.IsDevelopment())
+    {
+        Console.WriteLine("[auth] Authentication:BypassEntra=true; using Development auth scheme (X-Dev-* headers). Do NOT enable this on internet-facing deployments.");
+    }
+
     builder.Services
         .AddAuthentication(DevelopmentAuthenticationHandler.SchemeName)
         .AddScheme<AuthenticationSchemeOptions, DevelopmentAuthenticationHandler>(DevelopmentAuthenticationHandler.SchemeName, null);
+}
 
+if (builder.Environment.IsDevelopment())
+{
+
+    // The shipped appsettings.Development.json points Redis at the in-cluster
+    // `redis-service` hostname so the same image works inside the local
+    // kind/k3s deployment, but a vanilla `dotnet run` on a laptop has no
+    // Redis. Probe the configured endpoint with a short timeout: if it's
+    // reachable, use the Redis-backed stores; otherwise transparently fall
+    // back to in-memory so the gateway and management portal still work.
+    //
+    // The probe only runs in Development; production / cloud always uses
+    // Cosmos and never goes through this branch.
     var redisConnection = builder.Configuration.GetValue<string>("Redis:ConnectionString") ?? "localhost:6379";
-    builder.Services.AddStackExchangeRedisCache(options =>
-    {
-        options.Configuration = redisConnection;
-        options.InstanceName = "mcpgateway:";
-    });
+    var useInMemoryStoresSetting = builder.Configuration.GetValue<bool?>("Storage:UseInMemoryStores");
+    var useInMemoryStores = useInMemoryStoresSetting ?? !TryProbeRedis(redisConnection);
 
-    builder.Services.AddSingleton<IAdapterResourceStore, RedisAdapterResourceStore>();
-    builder.Services.AddSingleton<IToolResourceStore, RedisToolResourceStore>();
+    if (useInMemoryStores)
+    {
+        Console.WriteLine($"[dev] Redis at '{redisConnection}' unavailable or disabled; using in-memory stores.");
+        builder.Services.AddDistributedMemoryCache();
+        builder.Services.AddSingleton<IAdapterResourceStore, InMemoryAdapterResourceStore>();
+        builder.Services.AddSingleton<IToolResourceStore, InMemoryToolResourceStore>();
+    }
+    else
+    {
+        Console.WriteLine($"[dev] Using Redis at '{redisConnection}' for adapter/tool stores.");
+        builder.Services.AddStackExchangeRedisCache(options =>
+        {
+            options.Configuration = redisConnection;
+            options.InstanceName = "mcpgateway:";
+        });
+
+        builder.Services.AddSingleton<IAdapterResourceStore, RedisAdapterResourceStore>();
+        builder.Services.AddSingleton<IToolResourceStore, RedisToolResourceStore>();
+    }
+
     builder.Services.AddSingleton<IAgentResourceStore, InMemoryAgentResourceStore>();
     builder.Services.AddSingleton<ISessionResourceStore, InMemorySessionResourceStore>();
 
@@ -53,25 +94,28 @@ if (builder.Environment.IsDevelopment())
 }
 else
 {
-    var azureAdConfig = builder.Configuration.GetSection("AzureAd");
-    builder.Services.AddAuthentication(options =>
+    if (!useDevAuth)
     {
-        options.DefaultChallengeScheme = McpAuthenticationDefaults.AuthenticationScheme;
-        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    })
-    .AddScheme<McpAuthenticationOptions, McpSubPathAwareAuthenticationHandler>(
-        McpAuthenticationDefaults.AuthenticationScheme,
-        McpAuthenticationDefaults.DisplayName,
-    options =>
-    {
-        options.ResourceMetadata = new()
+        var azureAdConfig = builder.Configuration.GetSection("AzureAd");
+        builder.Services.AddAuthentication(options =>
         {
-            Resource = new Uri(builder.Configuration.GetValue<string>("PublicOrigin")!),
-            AuthorizationServers = { new Uri($"https://login.microsoftonline.com/{azureAdConfig["TenantId"]}/v2.0") },
-            ScopesSupported = [$"api://{azureAdConfig["ClientId"]}/.default"]
-        };
-    })
-    .AddMicrosoftIdentityWebApi(azureAdConfig);
+            options.DefaultChallengeScheme = McpAuthenticationDefaults.AuthenticationScheme;
+            options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        })
+        .AddScheme<McpAuthenticationOptions, McpSubPathAwareAuthenticationHandler>(
+            McpAuthenticationDefaults.AuthenticationScheme,
+            McpAuthenticationDefaults.DisplayName,
+        options =>
+        {
+            options.ResourceMetadata = new()
+            {
+                Resource = new Uri(builder.Configuration.GetValue<string>("PublicOrigin")!),
+                AuthorizationServers = { new Uri($"https://login.microsoftonline.com/{azureAdConfig["TenantId"]}/v2.0") },
+                ScopesSupported = [$"api://{azureAdConfig["ClientId"]}/.default"]
+            };
+        })
+        .AddMicrosoftIdentityWebApi(azureAdConfig);
+    }
 
     // Create CosmosClient with credential-based authentication
     var cosmosConfig = builder.Configuration.GetSection("CosmosSettings");
@@ -163,8 +207,52 @@ builder.WebHost.ConfigureKestrel(options =>
 
 var app = builder.Build();
 
+// Serve the management portal SPA out of wwwroot/portal. Static files are
+// mapped before authentication so the HTML shell, JS bundle and runtime
+// config endpoint are reachable anonymously; the SPA acquires its own
+// access token via MSAL once it loads.
+app.UseStaticFiles();
+
 // Configure the HTTP request pipeline.
 app.UseAuthentication();
 app.UseAuthorization();
+
+// Land users on the portal when they visit the gateway in a browser. The
+// redirect is attributed AllowAnonymous so the unauthenticated case still
+// reaches the SPA shell instead of the 401 challenge handler.
+app.MapGet("/", () => Results.Redirect("/portal/", permanent: false))
+    .AllowAnonymous();
+
 app.MapControllers();
+
+// Any /portal/* path that didn't match a physical file or controller route
+// is treated as a SPA route and served the portal shell. The `nonfile`
+// constraint keeps requests for hashed asset bundles flowing through the
+// static-file middleware instead. Constrained to /portal/* so requests like
+// `GET /adapters/foo` continue to hit the API controllers untouched.
+app.MapFallbackToFile("/portal", "portal/index.html").AllowAnonymous();
+app.MapFallbackToFile("/portal/{*path:nonfile}", "portal/index.html")
+    .AllowAnonymous();
 await app.RunAsync();
+
+// Best-effort check that a configured Redis is reachable. Only used by the
+// Development-mode store registration above so a developer running
+// `dotnet run` on a laptop transparently falls back to in-memory stores
+// instead of failing every /adapters and /tools call with a Redis timeout.
+static bool TryProbeRedis(string connectionString)
+{
+    try
+    {
+        var options = StackExchange.Redis.ConfigurationOptions.Parse(connectionString);
+        options.AbortOnConnectFail = false;
+        options.ConnectTimeout = 2000;
+        options.SyncTimeout = 2000;
+        options.ConnectRetry = 1;
+        using var muxer = StackExchange.Redis.ConnectionMultiplexer.Connect(options);
+        return muxer.IsConnected;
+    }
+    catch
+    {
+        return false;
+    }
+}
