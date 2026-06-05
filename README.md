@@ -269,6 +269,7 @@ Content-Type: application/json
 
 When an agent lists `builtin:bash` / `builtin:read_file` / `builtin:write_file` in its `tools`, those built-ins run **in the gateway pod** under a per-session working directory. They are guarded by:
 
+- A scrubbed, default-deny process environment for `builtin:bash`: the spawned shell receives only a minimal allowlist (`PATH`, locale, `TERM`, `TZ`) with `HOME` / `TMPDIR` / `PWD` pinned to the session directory. The full gateway process environment is not inherited.
 - A regex denylist for clearly dangerous shell operations (`sudo`, network egress, mounts, package managers, etc.). This is *defense-in-depth*, not a sandbox.
 - 30s default / 120s max bash timeout; 16 KiB output cap per stream; 256 KiB max file size; 4 MiB total writes per session.
 - Path resolution rejects absolute paths and `..` traversal.

@@ -13,8 +13,13 @@ namespace Microsoft.McpGateway.Management.Foundry
     /// <summary>
     /// Built-in agent tools that run in-process inside the gateway pod.
     /// All file operations are confined to a per-session
-    /// <c>workingDirectory</c>; bash commands inherit that as cwd.
-    /// P2 will add command allowlist + cgroup-style isolation.
+    /// <c>workingDirectory</c>; bash commands inherit that as cwd and run with
+    /// a sanitized, default-deny environment (see
+    /// <see cref="ApplySandboxedEnvironment"/>). A regex denylist blocks obvious
+    /// privileged / network / lateral-movement foot-guns as defense-in-depth.
+    /// This is still not a full sandbox: for multi-tenant or production use,
+    /// run built-ins in an out-of-process sandbox (gVisor / firejail /
+    /// pod-per-session).
     /// </summary>
     public class BuiltinToolExecutor
     {
@@ -37,8 +42,21 @@ namespace Microsoft.McpGateway.Management.Foundry
         // P3+ should replace this with a real sandbox (gVisor / firejail /
         // pod-per-session) and demote this to defense-in-depth.
         private static readonly Regex DenyPattern = new(
-            pattern: @"\b(?:sudo|su|mount|umount|kill|pkill|killall|reboot|shutdown|halt|poweroff|init|systemctl|service|iptables|nft|nftables|ip6tables|ufw|firewall-cmd|chroot|insmod|rmmod|modprobe|sysctl|dd|mkfs(?:\.\w+)?|fdisk|parted|crontab|at|chage|useradd|userdel|usermod|groupadd|passwd|visudo|setcap|setfacl|chown|chmod\s+[0-7]*[2367]?7+|nc|ncat|netcat|socat|nmap|ssh|scp|sftp|rsync|telnet|ftp|tftp|curl|wget|aria2c|http(?:ie)?)\b|/etc/(?:passwd|shadow|sudoers|hosts)|/proc/(?:sys|kcore|self/mem)|/sys/(?:kernel|class)|\$\(.*?(?:curl|wget|nc|sh|bash|eval|exec).*?\)|`.*?(?:curl|wget|nc|sh|bash|eval|exec).*?`|>\s*/dev/(?!null|stdout|stderr)|rm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+/(?!tmp)",
+            pattern: @"\b(?:sudo|su|mount|umount|kill|pkill|killall|reboot|shutdown|halt|poweroff|init|systemctl|service|iptables|nft|nftables|ip6tables|ufw|firewall-cmd|chroot|insmod|rmmod|modprobe|sysctl|dd|mkfs(?:\.\w+)?|fdisk|parted|crontab|at|chage|useradd|userdel|usermod|groupadd|passwd|visudo|setcap|setfacl|chown|chmod\s+[0-7]*[2367]?7+|nc|ncat|netcat|socat|nmap|ssh|scp|sftp|rsync|telnet|ftp|tftp|curl|wget|aria2c|http(?:ie)?)\b|/etc/(?:passwd|shadow|sudoers|hosts)|/proc/(?:sys|kcore|[^/\s]+/(?:mem|environ|cmdline))|/sys/(?:kernel|class)|\$\(.*?(?:curl|wget|nc|sh|bash|eval|exec).*?\)|`.*?(?:curl|wget|nc|sh|bash|eval|exec).*?`|>\s*/dev/(?!null|stdout|stderr)|rm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+/(?!tmp)",
             options: RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // Environment variables that are safe to expose.
+        private static readonly IReadOnlyList<string> AllowedEnvironmentVariables = new[]
+        {
+            "PATH",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "TERM",
+            "TZ",
+        };
+
+        private const string FallbackPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
         // Tracks bytes written per session for soft disk-quota enforcement.
         // In-process (not durable across restarts); fine for single-replica
@@ -136,6 +154,8 @@ namespace Microsoft.McpGateway.Management.Foundry
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+
+            ApplySandboxedEnvironment(psi, cwd);
 
             using var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
             var stdoutBuf = new StringBuilder();
@@ -332,6 +352,44 @@ namespace Microsoft.McpGateway.Management.Foundry
                     buf.AppendLine(data);
                 }
             }
+        }
+
+        /// <summary>
+        /// Replace the child process environment with a minimal, non-sensitive
+        /// allowlist so built-in shell commands only see a small, well-known
+        /// set of variables instead of the full gateway process environment.
+        /// </summary>
+        internal static void ApplySandboxedEnvironment(ProcessStartInfo psi, string workingDirectory)
+        {
+            // Accessing psi.Environment lazily seeds it with the parent
+            // process environment; capture the values we want to keep before
+            // clearing everything else.
+            var preserved = new Dictionary<string, string?>(StringComparer.Ordinal);
+            foreach (var name in AllowedEnvironmentVariables)
+            {
+                if (psi.Environment.TryGetValue(name, out var value) && !string.IsNullOrEmpty(value))
+                {
+                    preserved[name] = value;
+                }
+            }
+
+            psi.Environment.Clear();
+
+            foreach (var kvp in preserved)
+            {
+                psi.Environment[kvp.Key] = kvp.Value;
+            }
+
+            // Guarantee a usable PATH even if the gateway process had none.
+            if (!psi.Environment.ContainsKey("PATH"))
+            {
+                psi.Environment["PATH"] = FallbackPath;
+            }
+
+            // Confine HOME/TMPDIR/PWD to the session working directory.
+            psi.Environment["HOME"] = workingDirectory;
+            psi.Environment["TMPDIR"] = workingDirectory;
+            psi.Environment["PWD"] = workingDirectory;
         }
 
         private static void EnsureWorkingDirectory(string workingDirectory)
