@@ -5,6 +5,13 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <Platforms>x64</Platforms>
+    <!--
+      Set BuildPortal=false to skip the npm build (useful for incremental
+      backend-only dev loops). The container image build always includes it.
+    -->
+    <BuildPortal Condition="'$(BuildPortal)' == ''">true</BuildPortal>
+    <PortalSourceDir>$(MSBuildThisFileDirectory)..\..\..\portal\</PortalSourceDir>
+    <PortalOutputDir>$(MSBuildThisFileDirectory)wwwroot\portal\</PortalOutputDir>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,4 +27,33 @@
     <ProjectReference Include="..\..\Microsoft.McpGateway.Management\src\Microsoft.McpGateway.Management.csproj" />
   </ItemGroup>
 
+  <!--
+    The portal SPA is built (npm ci + npm run build) into wwwroot/portal as
+    part of `dotnet publish` so the container image always contains the
+    latest assets. `dotnet build` skips the npm step to keep developer
+    inner-loops fast; set `/p:BuildPortal=true` to force a rebuild there.
+
+    The Vite output lands under wwwroot/portal *after* the SDK's default
+    `Content` glob has already been evaluated, so on a clean checkout those
+    files would not otherwise be part of the publish/container output. We
+    therefore add the generated assets to `ResolvedFileToPublish` explicitly
+    and run before `ComputeFilesToPublish` so the manifest picks them up.
+  -->
+  <Target Name="BuildManagementPortal"
+          BeforeTargets="ComputeFilesToPublish"
+          Condition="'$(BuildPortal)' == 'true' AND Exists('$(PortalSourceDir)package.json')">
+    <Message Importance="high" Text="Building MCP Gateway portal from $(PortalSourceDir)" />
+    <Exec Command="npm ci --prefer-offline --no-audit --no-fund" WorkingDirectory="$(PortalSourceDir)" />
+    <Exec Command="npm run build" WorkingDirectory="$(PortalSourceDir)" />
+
+    <ItemGroup>
+      <_PortalPublishFiles Include="$(PortalOutputDir)**\*" />
+      <ResolvedFileToPublish Include="@(_PortalPublishFiles)">
+        <RelativePath>wwwroot\portal\%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
 </Project>
+

@@ -172,6 +172,13 @@ For step-by-step guidance on configuring Azure Entra ID (creating `mcp.admin` an
 - Support for **Proxying Local & Remote MCP Servers**. See [examples and usage](sample-servers/mcp-proxy/README.md).
 - Stateless reverse proxy with a distributed session store (production mode).
 - Kubernetes-native deployment using StatefulSets and headless services.
+- **Management portal** (React SPA) served by the gateway itself at
+  [`/portal/`](portal/README.md) — list / create / edit / delete adapters and
+  tools, inspect status and pod logs, and exercise each MCP server with an
+  in-browser JSON-RPC test console. Authentication mirrors the API: anonymous
+  in dev mode (with an optional dev-identity switcher) and MSAL / Entra ID in
+  cloud mode, so every list call already filters down to the resources the
+  signed-in user is allowed to see.
 
 ### Tool Registration and Dynamic Routing
 
