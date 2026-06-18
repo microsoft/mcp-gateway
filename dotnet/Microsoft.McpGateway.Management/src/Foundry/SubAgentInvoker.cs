@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.McpGateway.Management.Contracts;
@@ -42,15 +43,22 @@ namespace Microsoft.McpGateway.Management.Foundry
         /// Returns a <see cref="ToolResult"/> whose content is the child's
         /// final answer (or a JSON error blob if the run failed).
         /// </summary>
+        /// <param name="accessContext">
+        /// The effective caller of the originating run. Carried into the child
+        /// run so the child's own nested tools/subagents are authorized against
+        /// the live caller rather than the parent's creator (MSRC-122743).
+        /// </param>
         public async Task<ToolResult> InvokeAsync(
             AgentResource childAgent,
             string input,
             string parentSessionId,
+            ClaimsPrincipal accessContext,
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(childAgent);
             ArgumentException.ThrowIfNullOrEmpty(input);
             ArgumentException.ThrowIfNullOrEmpty(parentSessionId);
+            ArgumentNullException.ThrowIfNull(accessContext);
 
             // Walk up the parent chain to enforce depth limit.
             var depth = await ComputeDepthAsync(parentSessionId, cancellationToken).ConfigureAwait(false);
@@ -63,8 +71,9 @@ namespace Microsoft.McpGateway.Management.Foundry
                     IsError: true);
             }
 
-            // Inherit auth context from the parent so downstream permission
-            // checks (when added) see the same caller.
+            // The child session is recorded under the parent's creator for
+            // lineage/observability, but authorization for the child's nested
+            // resources uses the live caller (accessContext), not this value.
             var parent = await _sessionStore.TryGetAsync(parentSessionId, cancellationToken).ConfigureAwait(false);
             var createdBy = parent?.CreatedBy ?? "subagent";
 
@@ -96,6 +105,7 @@ namespace Microsoft.McpGateway.Management.Foundry
                 parentSessionId: parentSessionId,
                 history: child.Messages,
                 workingDirectory: child.WorkingDirectory,
+                accessContext,
                 cancellationToken).ConfigureAwait(false))
             {
                 if (evt.Type == SessionEventType.Completed)

@@ -66,10 +66,12 @@ namespace Microsoft.McpGateway.Management.Service
             await _store.UpsertAsync(session, cancellationToken).ConfigureAwait(false);
 
             // Phase 3: kick off the agent loop (LLM + tool calls) in the
-            // background. Caller polls /sessions/{id} for completion.
+            // background. Caller polls /sessions/{id} for completion. The
+            // caller's principal is captured so nested tools/subagents are
+            // authorized against the live caller (MSRC-122743).
             if (_agentRunner != null)
             {
-                _ = Task.Run(() => RunSessionAsync(session.Id), CancellationToken.None);
+                _ = Task.Run(() => RunSessionAsync(session.Id, accessContext), CancellationToken.None);
             }
             else
             {
@@ -84,7 +86,7 @@ namespace Microsoft.McpGateway.Management.Service
         /// against the user's input as a one-shot chat completion. Updates the
         /// stored session with Status=Completed/Failed and Result/Error.
         /// </summary>
-        private async Task RunSessionAsync(string sessionId)
+        private async Task RunSessionAsync(string sessionId, ClaimsPrincipal accessContext)
         {
             try
             {
@@ -102,6 +104,7 @@ namespace Microsoft.McpGateway.Management.Service
                 var result = await _agentRunner!.RunAsync(
                     session.AgentSnapshot,
                     session.Input,
+                    accessContext,
                     CancellationToken.None).ConfigureAwait(false);
 
                 session.Result = result;
@@ -169,6 +172,7 @@ namespace Microsoft.McpGateway.Management.Service
                 parentSessionId: session.ParentSessionId,
                 history: session.Messages,
                 workingDirectory: session.WorkingDirectory,
+                accessContext,
                 cancellationToken).GetAsyncEnumerator(cancellationToken);
             try
             {
@@ -265,6 +269,7 @@ namespace Microsoft.McpGateway.Management.Service
                 parentSessionId: session.ParentSessionId,
                 history: session.Messages,
                 workingDirectory: session.WorkingDirectory,
+                accessContext,
                 cancellationToken,
                 priorHistory: priorHistory).GetAsyncEnumerator(cancellationToken);
             try

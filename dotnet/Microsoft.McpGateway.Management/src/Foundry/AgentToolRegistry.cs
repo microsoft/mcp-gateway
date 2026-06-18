@@ -1,9 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Contracts;
 using Microsoft.McpGateway.Management.Store;
 
@@ -34,6 +36,7 @@ namespace Microsoft.McpGateway.Management.Foundry
         private readonly IToolResourceStore _toolStore;
         private readonly IAgentResourceStore _agentStore;
         private readonly IHttpClientFactory _httpClientFactory;
+        private readonly IPermissionProvider _permissionProvider;
         private readonly SubAgentInvoker? _subAgentInvoker;
         private readonly BuiltinToolExecutor? _builtinExecutor;
         private readonly ILogger<AgentToolRegistry> _logger;
@@ -42,6 +45,7 @@ namespace Microsoft.McpGateway.Management.Foundry
             IToolResourceStore toolStore,
             IAgentResourceStore agentStore,
             IHttpClientFactory httpClientFactory,
+            IPermissionProvider permissionProvider,
             ILogger<AgentToolRegistry> logger,
             SubAgentInvoker? subAgentInvoker = null,
             BuiltinToolExecutor? builtinExecutor = null)
@@ -49,6 +53,7 @@ namespace Microsoft.McpGateway.Management.Foundry
             _toolStore = toolStore ?? throw new ArgumentNullException(nameof(toolStore));
             _agentStore = agentStore ?? throw new ArgumentNullException(nameof(agentStore));
             _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
+            _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _subAgentInvoker = subAgentInvoker;
             _builtinExecutor = builtinExecutor;
@@ -58,8 +63,15 @@ namespace Microsoft.McpGateway.Management.Foundry
         /// Resolve the agent's declared tool list. Returns successfully resolved
         /// tools; logs and skips any that are missing or use an unsupported prefix.
         /// </summary>
-        public async Task<IReadOnlyList<ResolvedTool>> ResolveAsync(IEnumerable<string> toolNames, CancellationToken cancellationToken)
+        /// <param name="accessContext">
+        /// The effective caller of the current run. Each nested <c>mcp:</c> and
+        /// <c>agent:</c> reference is re-authorized against its <em>current</em>
+        /// <c>RequiredRoles</c> so that tools the caller may no longer access are
+        /// never advertised to the model (MSRC-122743).
+        /// </param>
+        public async Task<IReadOnlyList<ResolvedTool>> ResolveAsync(IEnumerable<string> toolNames, ClaimsPrincipal accessContext, CancellationToken cancellationToken)
         {
+            ArgumentNullException.ThrowIfNull(accessContext);
             var resolved = new List<ResolvedTool>();
             foreach (var raw in toolNames ?? Enumerable.Empty<string>())
             {
@@ -74,6 +86,11 @@ namespace Microsoft.McpGateway.Management.Foundry
                     if (resource?.ToolDefinition?.Tool == null)
                     {
                         _logger.LogWarning("MCP tool '{tool}' declared by agent but not found in store; skipping.", toolName);
+                        continue;
+                    }
+                    if (!await _permissionProvider.CheckAccessAsync(accessContext, resource, Operation.Read).ConfigureAwait(false))
+                    {
+                        _logger.LogWarning("Caller lacks permission to invoke MCP tool '{tool}'; excluding from resolved tools.", toolName);
                         continue;
                     }
                     resolved.Add(new McpResolvedTool(toolName, resource));
@@ -91,6 +108,11 @@ namespace Microsoft.McpGateway.Management.Foundry
                     if (agent == null)
                     {
                         _logger.LogWarning("Subagent '{agent}' declared by parent but not found in store; skipping.", agentName);
+                        continue;
+                    }
+                    if (!await _permissionProvider.CheckAccessAsync(accessContext, agent, Operation.Read).ConfigureAwait(false))
+                    {
+                        _logger.LogWarning("Caller lacks permission to invoke subagent '{agent}'; excluding from resolved tools.", agentName);
                         continue;
                     }
                     resolved.Add(new SubAgentResolvedTool(SubAgentFunctionPrefix + Sanitize(agentName), agent));
@@ -128,13 +150,21 @@ namespace Microsoft.McpGateway.Management.Foundry
         /// <c>ParentSessionId</c> on any spawned subagent session and to
         /// inherit auth context for the child run.
         /// </param>
-        public async Task<ToolResult> ExecuteAsync(ResolvedTool tool, string argumentsJson, string parentSessionId, string? workingDirectory, CancellationToken cancellationToken)
+        /// <param name="accessContext">
+        /// The effective caller of the current run. Nested <c>mcp:</c> and
+        /// <c>agent:</c> references are re-authorized against their current
+        /// <c>RequiredRoles</c> at invocation time, closing the window where a
+        /// stale parent reference could execute a since-restricted resource
+        /// (MSRC-122743).
+        /// </param>
+        public async Task<ToolResult> ExecuteAsync(ResolvedTool tool, string argumentsJson, string parentSessionId, string? workingDirectory, ClaimsPrincipal accessContext, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(tool);
+            ArgumentNullException.ThrowIfNull(accessContext);
             return tool switch
             {
-                McpResolvedTool mcp => await ExecuteMcpAsync(mcp, argumentsJson, cancellationToken).ConfigureAwait(false),
-                SubAgentResolvedTool sub => await ExecuteSubAgentAsync(sub, argumentsJson, parentSessionId, cancellationToken).ConfigureAwait(false),
+                McpResolvedTool mcp => await ExecuteMcpAsync(mcp, argumentsJson, accessContext, cancellationToken).ConfigureAwait(false),
+                SubAgentResolvedTool sub => await ExecuteSubAgentAsync(sub, argumentsJson, parentSessionId, accessContext, cancellationToken).ConfigureAwait(false),
                 BuiltinResolvedTool builtin => await ExecuteBuiltinAsync(builtin, argumentsJson, workingDirectory, cancellationToken).ConfigureAwait(false),
                 _ => new ToolResult(JsonSerializer.Serialize(new { error = $"Unsupported tool kind '{tool.GetType().Name}'." }), IsError: true),
             };
@@ -153,9 +183,24 @@ namespace Microsoft.McpGateway.Management.Foundry
             return _builtinExecutor.ExecuteAsync(tool.Name, argumentsJson, workingDirectory, cancellationToken);
         }
 
-        private async Task<ToolResult> ExecuteMcpAsync(McpResolvedTool tool, string argumentsJson, CancellationToken cancellationToken)
+        private async Task<ToolResult> ExecuteMcpAsync(McpResolvedTool tool, string argumentsJson, ClaimsPrincipal accessContext, CancellationToken cancellationToken)
         {
-            var def = tool.Resource.ToolDefinition;
+            // Re-resolve and re-authorize against the tool's current state so a
+            // stale parent reference cannot execute a since-restricted tool
+            // (MSRC-122743). Roles may have been tightened after this run began.
+            var current = await _toolStore.TryGetAsync(tool.Name, cancellationToken).ConfigureAwait(false);
+            if (current?.ToolDefinition?.Tool == null)
+            {
+                _logger.LogWarning("MCP tool {tool} no longer exists at invocation time; denying.", tool.Name);
+                return new ToolResult(JsonSerializer.Serialize(new { error = $"MCP tool '{tool.Name}' is no longer available." }), IsError: true);
+            }
+            if (!await _permissionProvider.CheckAccessAsync(accessContext, current, Operation.Read).ConfigureAwait(false))
+            {
+                _logger.LogWarning("Caller lacks permission to invoke MCP tool {tool} at invocation time; denying.", tool.Name);
+                return new ToolResult(JsonSerializer.Serialize(new { error = "You do not have permission to invoke this tool." }), IsError: true);
+            }
+
+            var def = current.ToolDefinition;
             // Same convention as HttpToolExecutor: the tool's pod is reachable
             // via cluster DNS in the "adapter" namespace.
             var endpoint = $"http://{tool.Name}-service.adapter.svc.cluster.local:{def.Port}{def.Path}";
@@ -177,12 +222,29 @@ namespace Microsoft.McpGateway.Management.Foundry
             return new ToolResult(body, IsError: false);
         }
 
-        private async Task<ToolResult> ExecuteSubAgentAsync(SubAgentResolvedTool tool, string argumentsJson, string parentSessionId, CancellationToken cancellationToken)
+        private async Task<ToolResult> ExecuteSubAgentAsync(SubAgentResolvedTool tool, string argumentsJson, string parentSessionId, ClaimsPrincipal accessContext, CancellationToken cancellationToken)
         {
             if (_subAgentInvoker == null)
             {
                 return new ToolResult("{\"error\":\"SubAgentInvoker is not registered.\"}", IsError: true);
             }
+
+            // Re-resolve and re-authorize against the child agent's current
+            // state so a stale parent reference cannot execute a since-restricted
+            // child agent (MSRC-122743). The effective caller — not the parent's
+            // creator — must satisfy the child's current RequiredRoles.
+            var current = await _agentStore.TryGetAsync(tool.Agent.Name, cancellationToken).ConfigureAwait(false);
+            if (current == null)
+            {
+                _logger.LogWarning("Subagent {agent} no longer exists at invocation time; denying.", tool.Agent.Name);
+                return new ToolResult(JsonSerializer.Serialize(new { error = $"Subagent '{tool.Agent.Name}' is no longer available." }), IsError: true);
+            }
+            if (!await _permissionProvider.CheckAccessAsync(accessContext, current, Operation.Read).ConfigureAwait(false))
+            {
+                _logger.LogWarning("Caller lacks permission to invoke subagent {agent} at invocation time; denying.", tool.Agent.Name);
+                return new ToolResult(JsonSerializer.Serialize(new { error = "You do not have permission to invoke this subagent." }), IsError: true);
+            }
+
             string input;
             try
             {
@@ -203,8 +265,8 @@ namespace Microsoft.McpGateway.Management.Foundry
             }
 
             _logger.LogInformation("Invoking subagent {agent} from parent session {parent} (input {len} chars)",
-                tool.Agent.Name, parentSessionId, input.Length);
-            return await _subAgentInvoker.InvokeAsync(tool.Agent, input, parentSessionId, cancellationToken).ConfigureAwait(false);
+                current.Name, parentSessionId, input.Length);
+            return await _subAgentInvoker.InvokeAsync(current, input, parentSessionId, accessContext, cancellationToken).ConfigureAwait(false);
         }
 
         private static string Sanitize(string agentName)
