@@ -106,7 +106,7 @@ namespace Microsoft.McpGateway.Management.Foundry
                     functionDescription: "Read a UTF-8 text file relative to the session's working directory.",
                     functionParameters: BinaryData.FromString("""
                         {"type":"object","properties":{
-                          "path":{"type":"string","description":"Path relative to the session working directory. Absolute paths and '..' segments are rejected."}
+                          "path":{"type":"string","description":"Path relative to the session working directory. Absolute paths, '..' segments, and symlinks whose final target is outside the session directory are rejected."}
                         },"required":["path"]}
                         """)),
                 WriteFile => global::OpenAI.Chat.ChatTool.CreateFunctionTool(
@@ -114,7 +114,7 @@ namespace Microsoft.McpGateway.Management.Foundry
                     functionDescription: "Write (or overwrite) a UTF-8 text file relative to the session's working directory.",
                     functionParameters: BinaryData.FromString("""
                         {"type":"object","properties":{
-                          "path":{"type":"string","description":"Path relative to the session working directory."},
+                          "path":{"type":"string","description":"Path relative to the session working directory. Absolute paths, '..' segments, and symlinks whose final target is outside the session directory are rejected."},
                           "content":{"type":"string","description":"File content (UTF-8)."}
                         },"required":["path","content"]}
                         """)),
@@ -309,6 +309,16 @@ namespace Microsoft.McpGateway.Management.Foundry
             _sessionBytesWritten.TryRemove(workingDirectory, out _);
         }
 
+        // Compare path strings case-insensitively on Windows (case-preserving
+        // but case-insensitive file system) and case-sensitively elsewhere
+        // (Linux, where the gateway actually runs the built-ins).
+        private static readonly StringComparison PathComparison =
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+        // Upper bound on symlink hops while canonicalizing, mirroring the
+        // typical kernel MAXSYMLINKS limit, to defeat symlink loops.
+        private const int MaxSymlinkHops = 40;
+
         private static (string fullPath, string? error) ResolvePath(string cwd, string relative)
         {
             if (string.IsNullOrWhiteSpace(relative))
@@ -323,13 +333,148 @@ namespace Microsoft.McpGateway.Management.Foundry
             {
                 return (string.Empty, "Path traversal ('..') is not allowed.");
             }
+
             var combined = Path.GetFullPath(Path.Combine(cwd, relative));
-            var cwdFull = Path.GetFullPath(cwd);
-            if (!combined.StartsWith(cwdFull, StringComparison.Ordinal))
+
+            // Canonicalize BOTH the session root and the requested target so the
+            // containment check is enforced AFTER symbolic links are resolved to
+            // their final filesystem target. A lexical check alone (the previous
+            // behavior) is bypassable with a session-local symlink that points
+            // outside the session directory (MSRC-122432): the path is lexically
+            // under the session root but the OS follows the link to an external
+            // target at file-access time.
+            var (canonicalRoot, rootError) = TryResolveCanonicalPath(Path.GetFullPath(cwd));
+            if (rootError != null || canonicalRoot is null)
+            {
+                return (string.Empty, "Unable to resolve the session working directory.");
+            }
+            var (canonicalTarget, targetError) = TryResolveCanonicalPath(combined);
+            if (targetError != null || canonicalTarget is null)
+            {
+                return (string.Empty, targetError ?? "Unable to resolve the requested path.");
+            }
+
+            if (!IsContainedWithin(canonicalRoot, canonicalTarget))
             {
                 return (string.Empty, "Path escapes the session working directory.");
             }
-            return (combined, null);
+
+            return (canonicalTarget, null);
+        }
+
+        /// <summary>
+        /// Returns <see langword="true"/> when <paramref name="candidate"/> is
+        /// the same path as, or a descendant of, <paramref name="root"/>. The
+        /// comparison requires a directory-separator boundary so that, for
+        /// example, "/root/session" does not match a sibling like
+        /// "/root/session-evil".
+        /// </summary>
+        private static bool IsContainedWithin(string root, string candidate)
+        {
+            if (string.Equals(root, candidate, PathComparison))
+            {
+                return true;
+            }
+            var rootWithSeparator = root.EndsWith(Path.DirectorySeparatorChar)
+                ? root
+                : root + Path.DirectorySeparatorChar;
+            return candidate.StartsWith(rootWithSeparator, PathComparison);
+        }
+
+        /// <summary>
+        /// Managed equivalent of POSIX <c>realpath</c>: walks
+        /// <paramref name="absolutePath"/> from its root one component at a time,
+        /// following any symbolic links (including intermediate directory
+        /// components and chained links) to their final target. Trailing
+        /// components that do not exist on disk are kept literally because a
+        /// non-existent entry cannot be a symlink — this lets the helper
+        /// canonicalize the destination of a not-yet-created file for write
+        /// operations. Returns an error if a symlink loop / excessive depth is
+        /// detected.
+        /// </summary>
+        private static (string? canonical, string? error) TryResolveCanonicalPath(string absolutePath)
+        {
+            var full = Path.GetFullPath(absolutePath);
+            var root = Path.GetPathRoot(full);
+            if (string.IsNullOrEmpty(root))
+            {
+                return (null, "Path is not rooted.");
+            }
+
+            var separators = new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar };
+            var pending = new List<string>(full[root.Length..].Split(separators, StringSplitOptions.RemoveEmptyEntries));
+
+            var resolved = root;
+            var hops = 0;
+            var index = 0;
+            while (index < pending.Count)
+            {
+                var segment = pending[index++];
+                if (segment.Length == 0 || segment == ".")
+                {
+                    continue;
+                }
+                if (segment == "..")
+                {
+                    var parent = Path.GetDirectoryName(resolved);
+                    resolved = string.IsNullOrEmpty(parent) ? root : parent;
+                    continue;
+                }
+
+                var candidate = Path.Combine(resolved, segment);
+                var linkTarget = TryGetLinkTarget(candidate);
+                if (linkTarget is null)
+                {
+                    // Not a symlink (or does not exist): accept verbatim.
+                    resolved = candidate;
+                    continue;
+                }
+
+                if (++hops > MaxSymlinkHops)
+                {
+                    return (null, "Too many levels of symbolic links.");
+                }
+
+                if (Path.IsPathRooted(linkTarget))
+                {
+                    // Absolute target: restart from the target's root, then
+                    // process the target's own components before the remaining
+                    // ones.
+                    var targetRoot = Path.GetPathRoot(linkTarget)!;
+                    resolved = targetRoot;
+                    pending.InsertRange(index, linkTarget[targetRoot.Length..].Split(separators, StringSplitOptions.RemoveEmptyEntries));
+                }
+                else
+                {
+                    // Relative target: resolve against the directory holding the
+                    // link (the current 'resolved').
+                    pending.InsertRange(index, linkTarget.Split(separators, StringSplitOptions.RemoveEmptyEntries));
+                }
+            }
+
+            return (resolved, null);
+        }
+
+        /// <summary>
+        /// Returns the immediate symbolic-link target for
+        /// <paramref name="path"/>, or <see langword="null"/> when the entry is
+        /// not a symlink (or does not exist). A fresh
+        /// <see cref="FileSystemInfo"/> is created on every call so the link
+        /// metadata is never served from a stale cache.
+        /// </summary>
+        private static string? TryGetLinkTarget(string path)
+        {
+            try
+            {
+                FileSystemInfo info = Directory.Exists(path)
+                    ? new DirectoryInfo(path)
+                    : new FileInfo(path);
+                return info.LinkTarget;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private void Append(StringBuilder buf, string? data)
