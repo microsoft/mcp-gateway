@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.Runtime.CompilerServices;
+using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.McpGateway.Management.Contracts;
@@ -36,10 +37,14 @@ namespace Microsoft.McpGateway.Management.Foundry
         /// Run the agent loop and return only the assistant's final text response.
         /// Used by callers that don't care about intermediate events.
         /// </summary>
-        public async Task<string> RunAsync(AgentResource agent, string userInput, CancellationToken cancellationToken)
+        /// <param name="accessContext">
+        /// The effective caller. Threaded down so nested tools/subagents are
+        /// authorized against the caller's current roles (MSRC-122743).
+        /// </param>
+        public async Task<string> RunAsync(AgentResource agent, string userInput, ClaimsPrincipal accessContext, CancellationToken cancellationToken)
         {
             string answer = string.Empty;
-            await foreach (var evt in RunStreamingAsync(agent, userInput, sessionId: string.Empty, parentSessionId: null, history: null, workingDirectory: null, cancellationToken).ConfigureAwait(false))
+            await foreach (var evt in RunStreamingAsync(agent, userInput, sessionId: string.Empty, parentSessionId: null, history: null, workingDirectory: null, accessContext, cancellationToken).ConfigureAwait(false))
             {
                 if (evt.Type == SessionEventType.Completed)
                 {
@@ -77,10 +82,12 @@ namespace Microsoft.McpGateway.Management.Foundry
             string? parentSessionId,
             IList<SessionMessage>? history,
             string? workingDirectory,
+            ClaimsPrincipal accessContext,
             [EnumeratorCancellation] CancellationToken cancellationToken,
             IReadOnlyList<SessionMessage>? priorHistory = null)
         {
             ArgumentNullException.ThrowIfNull(agent);
+            ArgumentNullException.ThrowIfNull(accessContext);
 
             yield return new SessionEvent { Type = SessionEventType.Started, SessionId = sessionId, ParentSessionId = parentSessionId };
 
@@ -90,7 +97,7 @@ namespace Microsoft.McpGateway.Management.Foundry
             string? prepError = null;
             try
             {
-                resolvedTools = await _toolRegistry.ResolveAsync(agent.Tools, cancellationToken).ConfigureAwait(false);
+                resolvedTools = await _toolRegistry.ResolveAsync(agent.Tools, accessContext, cancellationToken).ConfigureAwait(false);
                 chatTools = AgentToolRegistry.BuildChatTools(resolvedTools);
                 messages = new List<ChatMessage> { new SystemChatMessage(agent.System) };
                 if (priorHistory != null)
@@ -306,7 +313,7 @@ namespace Microsoft.McpGateway.Management.Foundry
                         {
                             try
                             {
-                                toolResult = await _toolRegistry.ExecuteAsync(resolved, arguments, sessionId, workingDirectory, cancellationToken).ConfigureAwait(false);
+                                toolResult = await _toolRegistry.ExecuteAsync(resolved, arguments, sessionId, workingDirectory, accessContext, cancellationToken).ConfigureAwait(false);
                             }
                             catch (Exception ex)
                             {
