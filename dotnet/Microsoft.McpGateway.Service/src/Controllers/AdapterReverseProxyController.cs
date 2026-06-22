@@ -38,12 +38,18 @@ namespace Microsoft.McpGateway.Service.Controllers
             if (!await EnsureAdapterReadAccessAsync(name, cancellationToken).ConfigureAwait(false))
                 return;
 
+            // The adapter identity authorized above is the only route this request is allowed to
+            // use. Bind both the session lookup and any newly created session to it so a session
+            // can never be resolved through a different adapter's route than the one it was
+            // created on (stale-session authorization bypass).
+            var adapterName = name ?? ToolGateway;
+
             var sessionId = AdapterSessionRoutingHandler.GetSessionId(HttpContext);
             string? targetAddress;
             if (string.IsNullOrEmpty(sessionId))
-                targetAddress = await sessionRoutingHandler.GetNewSessionTargetAsync(name ?? ToolGateway, HttpContext, cancellationToken).ConfigureAwait(false);
+                targetAddress = await sessionRoutingHandler.GetNewSessionTargetAsync(adapterName, HttpContext, cancellationToken).ConfigureAwait(false);
             else
-                targetAddress = await sessionRoutingHandler.GetExistingSessionTargetAsync(HttpContext, cancellationToken).ConfigureAwait(false);
+                targetAddress = await sessionRoutingHandler.GetExistingSessionTargetAsync(adapterName, HttpContext, cancellationToken).ConfigureAwait(false);
 
             if (targetAddress == null)
             {
@@ -67,7 +73,7 @@ namespace Microsoft.McpGateway.Service.Controllers
                     // or breaks routing semantics.
                     if (!AdapterSessionRoutingHandler.IsValidSessionId(sessionId))
                     {
-                        logger.LogWarning("Downstream adapter returned an invalid session id for adapter {adapterName}.", (name ?? ToolGateway).Sanitize());
+                        logger.LogWarning("Downstream adapter returned an invalid session id for adapter {adapterName}.", adapterName.Sanitize());
 
                         // Drop the invalid value from the proxied response so clients cannot
                         // cache or replay it — there is no scoped-key entry it could ever
@@ -76,9 +82,10 @@ namespace Microsoft.McpGateway.Service.Controllers
                     }
                     else
                     {
-                        // Bind the session to the authenticated user so subsequent lookups
-                        // require both the session id and the same user identity.
-                        var scopedKey = AdapterSessionRoutingHandler.BuildScopedSessionKey(HttpContext, sessionId);
+                        // Bind the session to the authenticated user and the adapter route it was
+                        // created on so subsequent lookups require the same user identity and the
+                        // same adapter the caller is authorized for.
+                        var scopedKey = AdapterSessionRoutingHandler.BuildScopedSessionKey(HttpContext, adapterName, sessionId);
                         await sessionStore.SetAsync(scopedKey, targetAddress, cancellationToken).ConfigureAwait(false);
                     }
                 }
