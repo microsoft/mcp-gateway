@@ -30,8 +30,10 @@ namespace Microsoft.McpGateway.Service.Session
             return targetAddress;
         }
 
-        public async Task<string?> GetExistingSessionTargetAsync(HttpContext httpContext, CancellationToken cancellationToken)
+        public async Task<string?> GetExistingSessionTargetAsync(string adapterName, HttpContext httpContext, CancellationToken cancellationToken)
         {
+            ArgumentException.ThrowIfNullOrEmpty(adapterName);
+
             var sessionId = GetSessionId(httpContext);
             if (string.IsNullOrEmpty(sessionId))
             {
@@ -47,9 +49,14 @@ namespace Microsoft.McpGateway.Service.Session
                 throw new ArgumentException("Session id is not valid, or has expired.");
             }
 
-            // Scope the lookup to the authenticated user so a client cannot route into another
-            // user's session by supplying that user's session id.
-            var scopedKey = BuildScopedSessionKey(httpContext, sessionId);
+            // Scope the lookup to both the authenticated user and the adapter named on the
+            // request route. Binding to the adapter prevents a session established against one
+            // adapter from being replayed through a different adapter's URL after the caller's
+            // access to the original adapter has been revoked (stale-session authorization
+            // bypass). The route adapter is the same value already authorized by the caller, so
+            // a session can only resolve when the route the caller is currently allowed to use
+            // matches the route the session was created on.
+            var scopedKey = BuildScopedSessionKey(httpContext, adapterName, sessionId);
 
             var (targetAddress, exists) = await _sessionStore.TryGetAsync(scopedKey, cancellationToken).ConfigureAwait(false);
             if (!exists || targetAddress == null)
@@ -89,18 +96,24 @@ namespace Microsoft.McpGateway.Service.Session
             !string.IsNullOrEmpty(sessionId) && SessionIdPattern.IsMatch(sessionId);
 
         /// <summary>
-        /// Computes the session store key used for a given (user, session id) pair. Binding the
-        /// session id to the authenticated user's id prevents cross-tenant session hijacking
-        /// even when an attacker can observe or guess another user's raw session id.
+        /// Computes the session store key used for a given (user, adapter, session id) tuple.
+        /// Binding the session id to the authenticated user's id prevents cross-tenant session
+        /// hijacking even when an attacker can observe or guess another user's raw session id.
+        /// Binding it to the adapter name additionally prevents a session created on one adapter
+        /// route from being replayed through another adapter route, which would otherwise allow a
+        /// caller whose access to the original adapter was revoked to keep reaching its backend.
+        /// Both <paramref name="adapterName"/> (<c>^[a-z0-9-]+$</c>) and <paramref name="sessionId"/>
+        /// (<c>^[a-zA-Z0-9-]{1,128}$</c>) are colon-free, so the composed key is unambiguous.
         /// </summary>
         /// <exception cref="UnauthorizedAccessException">
         /// Thrown when the request has no authenticated user id. Endpoints that use the session
         /// store are expected to be guarded by <c>[Authorize]</c>; missing identity here means
         /// the request must be rejected rather than silently routed.
         /// </exception>
-        public static string BuildScopedSessionKey(HttpContext httpContext, string sessionId)
+        public static string BuildScopedSessionKey(HttpContext httpContext, string adapterName, string sessionId)
         {
             ArgumentNullException.ThrowIfNull(httpContext);
+            ArgumentException.ThrowIfNullOrEmpty(adapterName);
             ArgumentException.ThrowIfNullOrEmpty(sessionId);
 
             var userId = httpContext.User?.GetUserId();
@@ -109,7 +122,7 @@ namespace Microsoft.McpGateway.Service.Session
                 throw new UnauthorizedAccessException("Authenticated user is required to access a session.");
             }
 
-            return $"{userId}:{sessionId}";
+            return $"{userId}:{adapterName}:{sessionId}";
         }
     }
 }
