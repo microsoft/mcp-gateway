@@ -23,6 +23,7 @@ namespace Microsoft.McpGateway.Management.Tests
         private readonly Mock<IAgentResourceStore> _agentStoreMock;
         private readonly Mock<IToolResourceStore> _toolStoreMock;
         private readonly Mock<IPermissionProvider> _permissionProviderMock;
+        private readonly Mock<IBuiltinToolAuthorizer> _builtinToolAuthorizerMock;
         private readonly Mock<ILogger<AgentManagementService>> _loggerMock;
         private readonly AgentManagementService _service;
         private readonly ClaimsPrincipal _accessContext;
@@ -32,6 +33,7 @@ namespace Microsoft.McpGateway.Management.Tests
             _agentStoreMock = new Mock<IAgentResourceStore>();
             _toolStoreMock = new Mock<IToolResourceStore>();
             _permissionProviderMock = new Mock<IPermissionProvider>();
+            _builtinToolAuthorizerMock = new Mock<IBuiltinToolAuthorizer>();
             _loggerMock = new Mock<ILogger<AgentManagementService>>();
 
             _permissionProviderMock
@@ -40,11 +42,17 @@ namespace Microsoft.McpGateway.Management.Tests
             _permissionProviderMock
                 .Setup(x => x.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<IEnumerable<AgentResource>>(), Operation.Read))
                 .ReturnsAsync((ClaimsPrincipal _, IEnumerable<AgentResource> r, Operation _) => r.ToArray());
+            // Default to authorized so non-built-in tests are unaffected; the
+            // built-in gate tests below override this to false.
+            _builtinToolAuthorizerMock
+                .Setup(x => x.IsAuthorized(It.IsAny<ClaimsPrincipal>()))
+                .Returns(true);
 
             _service = new AgentManagementService(
                 _agentStoreMock.Object,
                 _toolStoreMock.Object,
                 _permissionProviderMock.Object,
+                _builtinToolAuthorizerMock.Object,
                 _loggerMock.Object);
 
             _accessContext = new ClaimsPrincipal(new ClaimsIdentity([new(ClaimTypes.NameIdentifier, "user1")]));
@@ -140,6 +148,47 @@ namespace Microsoft.McpGateway.Management.Tests
             Func<Task> act = () => _service.CreateAsync(_accessContext, request, CancellationToken.None);
 
             await act.Should().ThrowAsync<ArgumentException>().WithMessage("*builtin:nope*");
+        }
+
+        [TestMethod]
+        public async Task CreateAsync_ShouldThrow_WhenCallerNotAuthorizedForBuiltin()
+        {
+            var request = CreateAgentData("agent-builtin-denied", new List<string> { "builtin:bash" });
+            _agentStoreMock.Setup(x => x.TryGetAsync("agent-builtin-denied", It.IsAny<CancellationToken>())).ReturnsAsync((AgentResource?)null);
+            _builtinToolAuthorizerMock.Setup(x => x.IsAuthorized(It.IsAny<ClaimsPrincipal>())).Returns(false);
+
+            Func<Task> act = () => _service.CreateAsync(_accessContext, request, CancellationToken.None);
+
+            await act.Should().ThrowAsync<UnauthorizedAccessException>().WithMessage("*built-in tool 'builtin:bash'*");
+            _agentStoreMock.Verify(x => x.UpsertAsync(It.IsAny<AgentResource>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [TestMethod]
+        public async Task CreateAsync_ShouldRejectUnknownBuiltin_EvenWhenUnauthorized()
+        {
+            // Unknown built-ins are an ArgumentException (membership) regardless of
+            // the caller's authorization decision.
+            var request = CreateAgentData("agent-unknown-builtin", new List<string> { "builtin:nope" });
+            _agentStoreMock.Setup(x => x.TryGetAsync("agent-unknown-builtin", It.IsAny<CancellationToken>())).ReturnsAsync((AgentResource?)null);
+            _builtinToolAuthorizerMock.Setup(x => x.IsAuthorized(It.IsAny<ClaimsPrincipal>())).Returns(false);
+
+            Func<Task> act = () => _service.CreateAsync(_accessContext, request, CancellationToken.None);
+
+            await act.Should().ThrowAsync<ArgumentException>().WithMessage("*builtin:nope*");
+        }
+
+        [TestMethod]
+        public async Task UpdateAsync_ShouldThrow_WhenCallerNotAuthorizedForBuiltin()
+        {
+            var request = CreateAgentData("agent-builtin-upd", new List<string> { "builtin:bash" });
+            var existing = AgentResource.Create(CreateAgentData("agent-builtin-upd"), "user1", DateTimeOffset.UtcNow);
+            _agentStoreMock.Setup(x => x.TryGetAsync("agent-builtin-upd", It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+            _builtinToolAuthorizerMock.Setup(x => x.IsAuthorized(It.IsAny<ClaimsPrincipal>())).Returns(false);
+
+            Func<Task> act = () => _service.UpdateAsync(_accessContext, request, CancellationToken.None);
+
+            await act.Should().ThrowAsync<UnauthorizedAccessException>().WithMessage("*built-in tool 'builtin:bash'*");
+            _agentStoreMock.Verify(x => x.UpsertAsync(It.IsAny<AgentResource>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [TestMethod]

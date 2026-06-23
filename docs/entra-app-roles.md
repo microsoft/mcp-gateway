@@ -36,3 +36,27 @@ Follow these steps to enable application roles, assign them to identities, and p
   - **Write** access if the caller is the creator or holds `mcp.admin`.
 
   > If no `requiredRoles` is configured, it by default ALLOW ALL READ access.
+
+## 4. Authorize Built-in Agent Tools (`bash`, `read_file`, `write_file`)
+
+The in-process built-in tools run shell commands and read/write files inside the gateway pod, so they are treated as a **privileged capability** rather than an ordinary resource. Unlike adapters/tools, they have no per-resource `requiredRoles`; access is gated on the **caller's role** — at agent create/update time *and* again at run time (tool resolution and invocation) — with **no creator bypass**. Even the author of an agent must hold the required role to reference or invoke a built-in.
+
+- **Default (fail-closed):** only callers holding `mcp.admin` may reference or invoke built-in tools.
+- To grant built-in access without full admin, create a dedicated app role (e.g. `mcp.builtin`), assign it (Section 2), then configure it on the gateway:
+
+  ```jsonc
+  // appsettings.json
+  {
+    "BuiltinToolSettings": {
+      "RequiredRoles": [ "mcp.builtin" ]
+    }
+  }
+  ```
+
+  The same setting via environment variables (e.g. in the pod spec) uses the array index form:
+
+  ```
+  BuiltinToolSettings__RequiredRoles__0=mcp.builtin
+  ```
+
+  `mcp.admin` is always permitted in addition to any configured roles. Leaving `RequiredRoles` empty keeps built-ins admin-only.

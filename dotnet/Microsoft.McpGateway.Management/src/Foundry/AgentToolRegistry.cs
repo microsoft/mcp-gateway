@@ -37,6 +37,7 @@ namespace Microsoft.McpGateway.Management.Foundry
         private readonly IAgentResourceStore _agentStore;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly IPermissionProvider _permissionProvider;
+        private readonly IBuiltinToolAuthorizer _builtinToolAuthorizer;
         private readonly SubAgentInvoker? _subAgentInvoker;
         private readonly BuiltinToolExecutor? _builtinExecutor;
         private readonly ILogger<AgentToolRegistry> _logger;
@@ -46,6 +47,7 @@ namespace Microsoft.McpGateway.Management.Foundry
             IAgentResourceStore agentStore,
             IHttpClientFactory httpClientFactory,
             IPermissionProvider permissionProvider,
+            IBuiltinToolAuthorizer builtinToolAuthorizer,
             ILogger<AgentToolRegistry> logger,
             SubAgentInvoker? subAgentInvoker = null,
             BuiltinToolExecutor? builtinExecutor = null)
@@ -54,6 +56,7 @@ namespace Microsoft.McpGateway.Management.Foundry
             _agentStore = agentStore ?? throw new ArgumentNullException(nameof(agentStore));
             _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
             _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
+            _builtinToolAuthorizer = builtinToolAuthorizer ?? throw new ArgumentNullException(nameof(builtinToolAuthorizer));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _subAgentInvoker = subAgentInvoker;
             _builtinExecutor = builtinExecutor;
@@ -132,6 +135,14 @@ namespace Microsoft.McpGateway.Management.Foundry
                         _logger.LogWarning("Unknown builtin tool '{tool}'; supported: {kinds}.", raw, string.Join(",", BuiltinToolExecutor.SupportedKinds));
                         continue;
                     }
+                    // Built-ins are privileged in-process capabilities with no backing
+                    // resource ACL; gate them on the effective caller's role so they are
+                    // never advertised to the model for an unauthorized run.
+                    if (!_builtinToolAuthorizer.IsAuthorized(accessContext))
+                    {
+                        _logger.LogWarning("Caller lacks permission to use built-in tool '{tool}'; excluding from resolved tools.", raw);
+                        continue;
+                    }
                     resolved.Add(new BuiltinResolvedTool(fn));
                     continue;
                 }
@@ -165,16 +176,25 @@ namespace Microsoft.McpGateway.Management.Foundry
             {
                 McpResolvedTool mcp => await ExecuteMcpAsync(mcp, argumentsJson, accessContext, cancellationToken).ConfigureAwait(false),
                 SubAgentResolvedTool sub => await ExecuteSubAgentAsync(sub, argumentsJson, parentSessionId, accessContext, cancellationToken).ConfigureAwait(false),
-                BuiltinResolvedTool builtin => await ExecuteBuiltinAsync(builtin, argumentsJson, workingDirectory, cancellationToken).ConfigureAwait(false),
+                BuiltinResolvedTool builtin => await ExecuteBuiltinAsync(builtin, argumentsJson, workingDirectory, accessContext, cancellationToken).ConfigureAwait(false),
                 _ => new ToolResult(JsonSerializer.Serialize(new { error = $"Unsupported tool kind '{tool.GetType().Name}'." }), IsError: true),
             };
         }
 
-        private Task<ToolResult> ExecuteBuiltinAsync(BuiltinResolvedTool tool, string argumentsJson, string? workingDirectory, CancellationToken cancellationToken)
+        private Task<ToolResult> ExecuteBuiltinAsync(BuiltinResolvedTool tool, string argumentsJson, string? workingDirectory, ClaimsPrincipal accessContext, CancellationToken cancellationToken)
         {
             if (_builtinExecutor == null)
             {
                 return Task.FromResult(new ToolResult("{\"error\":\"BuiltinToolExecutor is not registered.\"}", IsError: true));
+            }
+            // Re-authorize at invocation time (defense in depth, mirrors the MCP /
+            // subagent re-authorization) so a caller who lost the required role
+            // after the run began — or who is running another user's agent — cannot
+            // execute privileged built-ins even if one slipped past resolution.
+            if (!_builtinToolAuthorizer.IsAuthorized(accessContext))
+            {
+                _logger.LogWarning("Caller lacks permission to execute built-in tool {tool} at invocation time; denying.", tool.Name);
+                return Task.FromResult(new ToolResult(JsonSerializer.Serialize(new { error = "You do not have permission to invoke this built-in tool." }), IsError: true));
             }
             if (string.IsNullOrWhiteSpace(workingDirectory))
             {
