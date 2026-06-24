@@ -179,12 +179,11 @@ namespace Microsoft.McpGateway.Management.Service
         /// </summary>
         private async Task ValidateToolReferencesAsync(ClaimsPrincipal accessContext, AgentData request, CancellationToken cancellationToken)
         {
-            if (request.Tools == null || request.Tools.Count == 0)
-            {
-                return;
-            }
-
-            foreach (var entry in request.Tools)
+            // Iterate defensively over a possibly null/empty list rather than using an
+            // early return. With no entries this simply does no work; it also keeps the
+            // per-entry authorization checks below from being guarded by a user-controlled
+            // condition (avoids CodeQL cs/user-controlled-bypass-of-sensitive-method).
+            foreach (var entry in request.Tools ?? Enumerable.Empty<string>())
             {
                 if (string.IsNullOrWhiteSpace(entry))
                 {
