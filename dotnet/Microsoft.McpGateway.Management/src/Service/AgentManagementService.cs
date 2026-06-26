@@ -31,17 +31,20 @@ namespace Microsoft.McpGateway.Management.Service
         private readonly IAgentResourceStore _store;
         private readonly IToolResourceStore _toolStore;
         private readonly IPermissionProvider _permissionProvider;
+        private readonly IBuiltinToolAuthorizer _builtinToolAuthorizer;
         private readonly ILogger _logger;
 
         public AgentManagementService(
             IAgentResourceStore store,
             IToolResourceStore toolStore,
             IPermissionProvider permissionProvider,
+            IBuiltinToolAuthorizer builtinToolAuthorizer,
             ILogger<AgentManagementService> logger)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _toolStore = toolStore ?? throw new ArgumentNullException(nameof(toolStore));
             _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
+            _builtinToolAuthorizer = builtinToolAuthorizer ?? throw new ArgumentNullException(nameof(builtinToolAuthorizer));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
@@ -176,12 +179,11 @@ namespace Microsoft.McpGateway.Management.Service
         /// </summary>
         private async Task ValidateToolReferencesAsync(ClaimsPrincipal accessContext, AgentData request, CancellationToken cancellationToken)
         {
-            if (request.Tools == null || request.Tools.Count == 0)
-            {
-                return;
-            }
-
-            foreach (var entry in request.Tools)
+            // Iterate defensively over a possibly null/empty list rather than using an
+            // early return. With no entries this simply does no work; it also keeps the
+            // per-entry authorization checks below from being guarded by a user-controlled
+            // condition (avoids CodeQL cs/user-controlled-bypass-of-sensitive-method).
+            foreach (var entry in request.Tools ?? Enumerable.Empty<string>())
             {
                 if (string.IsNullOrWhiteSpace(entry))
                 {
@@ -227,6 +229,15 @@ namespace Microsoft.McpGateway.Management.Service
                         if (!KnownBuiltins.Contains(entry))
                         {
                             throw new ArgumentException($"Unknown built-in tool '{entry}'. Supported: {string.Join(", ", KnownBuiltins)}.");
+                        }
+                        // Built-ins are privileged in-process capabilities (shell / file
+                        // access) with no backing resource ACL, so gate them on the caller's
+                        // role — never on agent ownership. This blocks persisting an agent
+                        // that references built-ins the caller may not use.
+                        if (!_builtinToolAuthorizer.IsAuthorized(accessContext))
+                        {
+                            _logger.LogWarning("User {userId} denied reference to built-in tool {tool} while saving agent {agent}.", accessContext.GetUserId(), entry.Sanitize(), request.Name.Sanitize());
+                            throw new UnauthorizedAccessException($"You do not have permission to reference built-in tool '{entry}'.");
                         }
                         break;
 

@@ -35,6 +35,7 @@ namespace Microsoft.McpGateway.Management.Tests
         private readonly Mock<ISessionResourceStore> _sessionStore = new();
         private readonly Mock<IHttpClientFactory> _httpFactory = new();
         private readonly Mock<IPermissionProvider> _permission = new();
+        private readonly Mock<IBuiltinToolAuthorizer> _builtinAuthorizer = new();
         private readonly Mock<ILogger<AgentToolRegistry>> _logger = new();
         private readonly SubAgentInvoker _subAgentInvoker;
         private readonly AgentToolRegistry _registry;
@@ -55,9 +56,28 @@ namespace Microsoft.McpGateway.Management.Tests
                 _agentStore.Object,
                 _httpFactory.Object,
                 _permission.Object,
+                _builtinAuthorizer.Object,
                 _logger.Object,
                 _subAgentInvoker,
                 builtinExecutor: null);
+        }
+
+        // Build a registry wired with a real BuiltinToolExecutor and a builtin
+        // authorizer that returns the given decision, for exercising the
+        // built-in capability gates.
+        private AgentToolRegistry CreateBuiltinRegistry(bool authorized)
+        {
+            var authorizer = new Mock<IBuiltinToolAuthorizer>();
+            authorizer.Setup(a => a.IsAuthorized(It.IsAny<ClaimsPrincipal>())).Returns(authorized);
+            return new AgentToolRegistry(
+                _toolStore.Object,
+                _agentStore.Object,
+                _httpFactory.Object,
+                _permission.Object,
+                authorizer.Object,
+                _logger.Object,
+                _subAgentInvoker,
+                new BuiltinToolExecutor(Mock.Of<ILogger<BuiltinToolExecutor>>()));
         }
 
         private static ClaimsPrincipal Caller(string userId, params string[] roles)
@@ -234,6 +254,49 @@ namespace Microsoft.McpGateway.Management.Tests
             // The child run must never start: no session persisted, no runner created.
             _runnerFactoryCalls.Should().Be(0);
             _sessionStore.Verify(s => s.UpsertAsync(It.IsAny<SessionResource>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        // ---- Built-in tools: privileged capability gate ----
+
+        [TestMethod]
+        public async Task ResolveAsync_ShouldExcludeBuiltin_WhenCallerNotAuthorized()
+        {
+            var registry = CreateBuiltinRegistry(authorized: false);
+
+            var resolved = await registry.ResolveAsync(["builtin:bash"], Caller("ordinary-poc", "ordinary-user"), CancellationToken.None);
+
+            resolved.Should().BeEmpty();
+        }
+
+        [TestMethod]
+        public async Task ResolveAsync_ShouldIncludeBuiltin_WhenCallerAuthorized()
+        {
+            var registry = CreateBuiltinRegistry(authorized: true);
+
+            var resolved = await registry.ResolveAsync(["builtin:bash"], Caller("admin-poc", "mcp.admin"), CancellationToken.None);
+
+            resolved.Should().ContainSingle()
+                .Which.Should().BeOfType<BuiltinResolvedTool>()
+                .Which.Name.Should().Be(BuiltinToolExecutor.Bash);
+        }
+
+        [TestMethod]
+        public async Task ExecuteAsync_ShouldDenyBuiltin_WhenCallerNotAuthorized()
+        {
+            // A real BuiltinToolExecutor is wired up, so reaching it would spawn
+            // bash; the authorization gate must short-circuit before that.
+            var registry = CreateBuiltinRegistry(authorized: false);
+
+            var result = await registry.ExecuteAsync(
+                new BuiltinResolvedTool(BuiltinToolExecutor.Bash),
+                "{\"command\":\"echo hi\"}",
+                parentSessionId: "parent-session",
+                workingDirectory: "/tmp/session",
+                Caller("ordinary-poc", "ordinary-user"),
+                CancellationToken.None);
+
+            result.IsError.Should().BeTrue();
+            result.Content.Should().Contain("permission");
         }
     }
 }

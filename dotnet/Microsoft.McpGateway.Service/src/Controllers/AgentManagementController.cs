@@ -32,6 +32,10 @@ namespace Microsoft.McpGateway.Service.Controllers
             {
                 return BadRequest(ex.Message);
             }
+            catch (UnauthorizedAccessException)
+            {
+                return Forbid();
+            }
         }
 
         // GET /agents/{name}
