@@ -11,7 +11,16 @@ namespace Microsoft.McpGateway.Service
 {
     public static class HttpProxy
     {
-        public static HttpRequestMessage CreateProxiedHttpRequest(HttpContext context, Func<Uri, Uri>? targetOverride = null)
+        /// <summary>
+        /// Builds the outbound request used to proxy <paramref name="context"/> to a backend pod.
+        /// </summary>
+        /// <param name="forwardGatewaySecret">
+        /// Whether to attach the shared <c>X-Gateway-Secret</c> credential. The tool gateway requires it
+        /// before it will trust the forwarded identity headers, so it may only be sent to first-party
+        /// internal targets; user-deployed adapter pods must never receive it. Defaults to
+        /// <see langword="false"/> so new call sites fail closed.
+        /// </param>
+        public static HttpRequestMessage CreateProxiedHttpRequest(HttpContext context, Func<Uri, Uri>? targetOverride = null, bool forwardGatewaySecret = false)
         {
             var hasBody = context.Request.ContentLength > 0 ||
                           context.Request.ContentLength is null && !HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method) && !HttpMethods.IsDelete(context.Request.Method) && !HttpMethods.IsOptions(context.Request.Method);
@@ -54,9 +63,12 @@ namespace Microsoft.McpGateway.Service
                     requestMessage.Headers.TryAddWithoutValidation(ForwardedIdentityHeaders.Roles, string.Join(',', roles));
             }
 
-            var gatewaySecret = context.RequestServices.GetService<IConfiguration>()?.GetValue<string>("GatewaySettings:Secret");
-            if (!string.IsNullOrEmpty(gatewaySecret))
-                requestMessage.Headers.TryAddWithoutValidation(ForwardedIdentityHeaders.GatewaySecret, gatewaySecret);
+            if (forwardGatewaySecret)
+            {
+                var gatewaySecret = context.RequestServices.GetService<IConfiguration>()?.GetValue<string>("GatewaySettings:Secret");
+                if (!string.IsNullOrEmpty(gatewaySecret))
+                    requestMessage.Headers.TryAddWithoutValidation(ForwardedIdentityHeaders.GatewaySecret, gatewaySecret);
+            }
 
             requestMessage.Headers.TryAddWithoutValidation("Forwarded", $"for={context.Connection.RemoteIpAddress};proto={context.Request.Scheme};host={context.Request.Host.Value}");
             return requestMessage;

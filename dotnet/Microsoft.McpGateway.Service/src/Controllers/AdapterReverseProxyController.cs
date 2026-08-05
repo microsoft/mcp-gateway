@@ -57,7 +57,9 @@ namespace Microsoft.McpGateway.Service.Controllers
                 return;
             }
 
-            var proxiedRequest = HttpProxy.CreateProxiedHttpRequest(HttpContext, (uri) => ReplaceUriAddress(uri, targetAddress));
+            // Only the first-party tool gateway route (no adapter name on the URL) is trusted with the
+            // shared gateway secret. Adapter pods are user supplied and must never receive it.
+            var proxiedRequest = HttpProxy.CreateProxiedHttpRequest(HttpContext, (uri) => ReplaceUriAddress(uri, targetAddress), forwardGatewaySecret: name is null);
 
             using var client = httpClientFactory.CreateClient(Constants.HttpClientNames.AdapterProxyClient);
             var response = await client.SendAsync(proxiedRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
