@@ -22,6 +22,7 @@ namespace Microsoft.McpGateway.Management.Tests
         private readonly Mock<IAdapterDeploymentManager> _deploymentManagerMock;
         private readonly Mock<IAdapterResourceStore> _storeMock;
         private readonly Mock<IPermissionProvider> _permissionProviderMock;
+        private readonly Mock<IWorkloadIdentityAuthorizer> _workloadIdentityAuthorizerMock;
         private readonly Mock<ILogger<AdapterManagementService>> _loggerMock;
     private readonly AdapterManagementService _service;
         private readonly ClaimsPrincipal _accessContext;
@@ -31,6 +32,7 @@ namespace Microsoft.McpGateway.Management.Tests
             _deploymentManagerMock = new Mock<IAdapterDeploymentManager>();
             _storeMock = new Mock<IAdapterResourceStore>();
             _permissionProviderMock = new Mock<IPermissionProvider>();
+            _workloadIdentityAuthorizerMock = new Mock<IWorkloadIdentityAuthorizer>();
             _loggerMock = new Mock<ILogger<AdapterManagementService>>();
             _permissionProviderMock.Setup(x => x.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<IManagedResource>(), Operation.Read))
                 .ReturnsAsync(true);
@@ -38,7 +40,8 @@ namespace Microsoft.McpGateway.Management.Tests
                 .ReturnsAsync(true);
             _permissionProviderMock.Setup(x => x.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<IEnumerable<AdapterResource>>(), Operation.Read))
                 .ReturnsAsync((ClaimsPrincipal _, IEnumerable<AdapterResource> resources, Operation _) => resources.ToArray());
-            _service = new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, _permissionProviderMock.Object, _loggerMock.Object);
+            _workloadIdentityAuthorizerMock.Setup(x => x.IsAuthorized(It.IsAny<ClaimsPrincipal>())).Returns(true);
+            _service = new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, _permissionProviderMock.Object, _workloadIdentityAuthorizerMock.Object, _loggerMock.Object);
             _accessContext = new ClaimsPrincipal(new ClaimsIdentity([new(ClaimTypes.NameIdentifier, "user1")]));
         }
 
@@ -370,7 +373,7 @@ namespace Microsoft.McpGateway.Management.Tests
         [TestMethod]
         public void Constructor_ShouldThrowArgumentNullException_WhenDeploymentManagerIsNull()
         {
-            var act = () => new AdapterManagementService(null!, _storeMock.Object, _permissionProviderMock.Object, _loggerMock.Object);
+            var act = () => new AdapterManagementService(null!, _storeMock.Object, _permissionProviderMock.Object, _workloadIdentityAuthorizerMock.Object, _loggerMock.Object);
 
             act.Should().Throw<ArgumentNullException>().WithParameterName("adapterDeploymentManager");
         }
@@ -378,7 +381,7 @@ namespace Microsoft.McpGateway.Management.Tests
         [TestMethod]
         public void Constructor_ShouldThrowArgumentNullException_WhenStoreIsNull()
         {
-            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, null!, _permissionProviderMock.Object, _loggerMock.Object);
+            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, null!, _permissionProviderMock.Object, _workloadIdentityAuthorizerMock.Object, _loggerMock.Object);
 
             act.Should().Throw<ArgumentNullException>().WithParameterName("store");
         }
@@ -386,17 +389,81 @@ namespace Microsoft.McpGateway.Management.Tests
         [TestMethod]
         public void Constructor_ShouldThrowArgumentNullException_WhenPermissionProviderIsNull()
         {
-            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, null!, _loggerMock.Object);
+            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, null!, _workloadIdentityAuthorizerMock.Object, _loggerMock.Object);
 
             act.Should().Throw<ArgumentNullException>().WithParameterName("permissionProvider");
         }
 
         [TestMethod]
+        public void Constructor_ShouldThrowArgumentNullException_WhenWorkloadIdentityAuthorizerIsNull()
+        {
+            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, _permissionProviderMock.Object, null!, _loggerMock.Object);
+
+            act.Should().Throw<ArgumentNullException>().WithParameterName("workloadIdentityAuthorizer");
+        }
+
+        [TestMethod]
         public void Constructor_ShouldThrowArgumentNullException_WhenLoggerIsNull()
         {
-            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, _permissionProviderMock.Object, null!);
+            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, _permissionProviderMock.Object, _workloadIdentityAuthorizerMock.Object, null!);
 
             act.Should().Throw<ArgumentNullException>().WithParameterName("logger");
+        }
+
+        [TestMethod]
+        public async Task CreateAsync_ShouldThrowUnauthorized_WhenWorkloadIdentityRequestedByUnauthorizedCaller()
+        {
+            _workloadIdentityAuthorizerMock.Setup(x => x.IsAuthorized(It.IsAny<ClaimsPrincipal>())).Returns(false);
+            var request = new AdapterData { Name = "wi-adapter", ImageName = "image", ImageVersion = "v1", UseWorkloadIdentity = true };
+            _storeMock.Setup(x => x.TryGetAsync("wi-adapter", It.IsAny<CancellationToken>())).ReturnsAsync((AdapterResource?)null);
+
+            Func<Task> act = () => _service.CreateAsync(_accessContext, request, CancellationToken.None);
+
+            await act.Should().ThrowAsync<UnauthorizedAccessException>();
+            _deploymentManagerMock.Verify(x => x.CreateDeploymentAsync(It.IsAny<AdapterData>(), It.IsAny<ResourceType>(), It.IsAny<CancellationToken>()), Times.Never);
+            _storeMock.Verify(x => x.UpsertAsync(It.IsAny<AdapterResource>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [TestMethod]
+        public async Task CreateAsync_ShouldCreateAdapter_WhenWorkloadIdentityNotRequestedByUnauthorizedCaller()
+        {
+            _workloadIdentityAuthorizerMock.Setup(x => x.IsAuthorized(It.IsAny<ClaimsPrincipal>())).Returns(false);
+            var request = new AdapterData { Name = "plain-adapter", ImageName = "image", ImageVersion = "v1", UseWorkloadIdentity = false };
+            _storeMock.Setup(x => x.TryGetAsync("plain-adapter", It.IsAny<CancellationToken>())).ReturnsAsync((AdapterResource?)null);
+
+            var result = await _service.CreateAsync(_accessContext, request, CancellationToken.None);
+
+            result.Name.Should().Be("plain-adapter");
+            _deploymentManagerMock.Verify(x => x.CreateDeploymentAsync(It.IsAny<AdapterData>(), ResourceType.Mcp, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [TestMethod]
+        public async Task UpdateAsync_ShouldThrowUnauthorized_WhenWorkloadIdentityRequestedByUnauthorizedCaller()
+        {
+            _workloadIdentityAuthorizerMock.Setup(x => x.IsAuthorized(It.IsAny<ClaimsPrincipal>())).Returns(false);
+            var existing = AdapterResource.Create(new AdapterData { Name = "wi-adapter", ImageName = "image", ImageVersion = "v1" }, "user1", DateTimeOffset.UtcNow);
+            _storeMock.Setup(x => x.TryGetAsync("wi-adapter", It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+            var request = new AdapterData { Name = "wi-adapter", ImageName = "image", ImageVersion = "v1", UseWorkloadIdentity = true };
+
+            Func<Task> act = () => _service.UpdateAsync(_accessContext, request, CancellationToken.None);
+
+            await act.Should().ThrowAsync<UnauthorizedAccessException>();
+            _deploymentManagerMock.Verify(x => x.UpdateDeploymentAsync(It.IsAny<AdapterData>(), It.IsAny<ResourceType>(), It.IsAny<CancellationToken>()), Times.Never);
+            _storeMock.Verify(x => x.UpsertAsync(It.IsAny<AdapterResource>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [TestMethod]
+        public async Task UpdateAsync_ShouldThrowArgumentException_WhenWorkloadIdentityToggledByAuthorizedCaller()
+        {
+            var existing = AdapterResource.Create(new AdapterData { Name = "wi-adapter", ImageName = "image", ImageVersion = "v1" }, "user1", DateTimeOffset.UtcNow);
+            _storeMock.Setup(x => x.TryGetAsync("wi-adapter", It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+            var request = new AdapterData { Name = "wi-adapter", ImageName = "image", ImageVersion = "v1", UseWorkloadIdentity = true };
+
+            Func<Task> act = () => _service.UpdateAsync(_accessContext, request, CancellationToken.None);
+
+            await act.Should().ThrowAsync<ArgumentException>().WithMessage("UseWorkloadIdentity cannot be changed*");
+            _deploymentManagerMock.Verify(x => x.UpdateDeploymentAsync(It.IsAny<AdapterData>(), It.IsAny<ResourceType>(), It.IsAny<CancellationToken>()), Times.Never);
+            _storeMock.Verify(x => x.UpsertAsync(It.IsAny<AdapterResource>(), It.IsAny<CancellationToken>()), Times.Never);
         }
     }
 

@@ -60,3 +60,27 @@ The in-process built-in tools run shell commands and read/write files inside the
   ```
 
   `mcp.admin` is always permitted in addition to any configured roles. Leaving `RequiredRoles` empty keeps built-ins admin-only.
+
+## 5. Authorize Workload Identity on Adapters and Tools (`useWorkloadIdentity`)
+
+Setting `useWorkloadIdentity: true` binds the deployed pod to the cluster's **shared** federated identity (the `workload-sa` service account annotated with `azure.workload.identity/client-id`). Any container in that pod can then mint Entra ID access tokens for that identity and reach whatever Azure resources it is granted. Because the identity is shared by every workload in the namespace and is not owned by the requester, this is gated on the **caller's role** at create *and* update time, with **no creator bypass**.
+
+- **Default (fail-closed):** only callers holding `mcp.admin` may set `useWorkloadIdentity: true`. Other callers receive `403 Forbidden`; adapters and tools that do not request workload identity are unaffected.
+- To grant this without full admin, create a dedicated app role (e.g. `mcp.workload`), assign it (Section 2), then configure it on the gateway:
+
+  ```jsonc
+  // appsettings.json
+  {
+    "WorkloadIdentitySettings": {
+      "RequiredRoles": [ "mcp.workload" ]
+    }
+  }
+  ```
+
+  The same setting via environment variables (e.g. in the pod spec) uses the array index form:
+
+  ```
+  WorkloadIdentitySettings__RequiredRoles__0=mcp.workload
+  ```
+
+  `mcp.admin` is always permitted in addition to any configured roles. Leaving `RequiredRoles` empty keeps workload identity admin-only.

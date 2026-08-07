@@ -177,6 +177,12 @@ builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
 // holding mcp.admin may reference or invoke built-ins.
 builder.Services.Configure<BuiltinToolSettings>(builder.Configuration.GetSection("BuiltinToolSettings"));
 builder.Services.AddSingleton<IBuiltinToolAuthorizer, BuiltinToolAuthorizer>();
+
+// Authorization for binding a deployed adapter/tool to the cluster's shared workload
+// identity. Fail-closed: with no WorkloadIdentitySettings:RequiredRoles configured, only
+// callers holding mcp.admin may request useWorkloadIdentity.
+builder.Services.Configure<WorkloadIdentitySettings>(builder.Configuration.GetSection("WorkloadIdentitySettings"));
+builder.Services.AddSingleton<IWorkloadIdentityAuthorizer, WorkloadIdentityAuthorizer>();
 builder.Services.AddSingleton<IAdapterDeploymentManager>(c =>
 {
     var config = builder.Configuration.GetSection("ContainerRegistrySettings");

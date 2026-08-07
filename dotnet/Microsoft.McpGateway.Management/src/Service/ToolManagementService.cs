@@ -30,17 +30,20 @@ namespace Microsoft.McpGateway.Management.Service
         private readonly IAdapterDeploymentManager _deploymentManager;
         private readonly IToolResourceStore _store;
         private readonly IPermissionProvider _permissionProvider;
+        private readonly IWorkloadIdentityAuthorizer _workloadIdentityAuthorizer;
         private readonly ILogger _logger;
 
         public ToolManagementService(
             IAdapterDeploymentManager adapterDeploymentManager,
             IToolResourceStore store,
             IPermissionProvider permissionProvider,
+            IWorkloadIdentityAuthorizer workloadIdentityAuthorizer,
             ILogger<ToolManagementService> logger)
         {
             _deploymentManager = adapterDeploymentManager ?? throw new ArgumentNullException(nameof(adapterDeploymentManager));
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
+            _workloadIdentityAuthorizer = workloadIdentityAuthorizer ?? throw new ArgumentNullException(nameof(workloadIdentityAuthorizer));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
@@ -53,6 +56,7 @@ namespace Microsoft.McpGateway.Management.Service
                 throw new ArgumentException("Name must contain only lowercase letters, numbers, and dashes.");
 
             ValidateToolDefinition(request.ToolDefinition);
+            EnsureWorkloadIdentityAllowed(accessContext, request);
 
             var existing = await _store.TryGetAsync(request.Name, cancellationToken).ConfigureAwait(false);
             if (existing != null)
@@ -105,11 +109,19 @@ namespace Microsoft.McpGateway.Management.Service
                 ?? throw new ArgumentException("The tool does not exist and cannot be updated.");
 
             await EnsureAccessAsync(accessContext, existing, Operation.Write).ConfigureAwait(false);
+            EnsureWorkloadIdentityAllowed(accessContext, request);
 
             // Throw if any change on unchangeable fields
             if (existing.Name != request.Name)
             {
                 throw new ArgumentException("The tool does not allow change on the submitted field.");
+            }
+
+            // The workload identity label is part of the StatefulSet selector, which Kubernetes
+            // does not allow patching, so the flag can only be set when the tool is created.
+            if (existing.UseWorkloadIdentity != request.UseWorkloadIdentity)
+            {
+                throw new ArgumentException("UseWorkloadIdentity cannot be changed after creation. Delete and recreate the tool instead.");
             }
 
             var updated = ToolResource.Create(request, existing.CreatedBy, existing.CreatedAt);
@@ -179,6 +191,25 @@ namespace Microsoft.McpGateway.Management.Service
 
             if (string.IsNullOrEmpty(toolDefinition.Path) || !PathPattern.IsMatch(toolDefinition.Path))
                 throw new ArgumentException("Path must start with '/' and contain only alphanumeric characters, slashes, dashes, underscores, and dots.");
+        }
+
+        /// <summary>
+        /// Binding a workload to the cluster's shared federated identity lets the deployed
+        /// container mint tokens for that identity, so it is gated on the caller's role
+        /// rather than on ownership of the tool being created or updated.
+        /// </summary>
+        private void EnsureWorkloadIdentityAllowed(ClaimsPrincipal accessContext, ToolData request)
+        {
+            // Evaluated unconditionally so the authorization check is never reached through a
+            // request-controlled branch (avoids CodeQL cs/user-controlled-bypass-of-sensitive-method).
+            var authorized = _workloadIdentityAuthorizer.IsAuthorized(accessContext);
+            if (!request.UseWorkloadIdentity || authorized)
+            {
+                return;
+            }
+
+            _logger.LogWarning("User {userId} is denied workload identity for tool {resourceId}.", accessContext.GetUserId(), request.Name.Sanitize());
+            throw new UnauthorizedAccessException("You do not have permission to enable workload identity.");
         }
 
         private async Task EnsureAccessAsync(ClaimsPrincipal accessContext, ToolResource resource, Operation operation)
