@@ -12,12 +12,13 @@ using Microsoft.McpGateway.Management.Store;
 
 namespace Microsoft.McpGateway.Management.Service
 {
-    public class AdapterManagementService(IAdapterDeploymentManager adapterDeploymentManager, IAdapterResourceStore store, IPermissionProvider permissionProvider, ILogger<AdapterManagementService> logger) : IAdapterManagementService
+    public class AdapterManagementService(IAdapterDeploymentManager adapterDeploymentManager, IAdapterResourceStore store, IPermissionProvider permissionProvider, IWorkloadIdentityAuthorizer workloadIdentityAuthorizer, ILogger<AdapterManagementService> logger) : IAdapterManagementService
     {
         private const string NamePattern = "^[a-z0-9-]+$";
         private readonly IAdapterDeploymentManager _deploymentManager = adapterDeploymentManager ?? throw new ArgumentNullException(nameof(adapterDeploymentManager));
         private readonly IAdapterResourceStore _store = store ?? throw new ArgumentNullException(nameof(store));
         private readonly IPermissionProvider _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
+        private readonly IWorkloadIdentityAuthorizer _workloadIdentityAuthorizer = workloadIdentityAuthorizer ?? throw new ArgumentNullException(nameof(workloadIdentityAuthorizer));
         private readonly ILogger _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         public async Task<AdapterResource> CreateAsync(ClaimsPrincipal accessContext, AdapterData request, CancellationToken cancellationToken)
@@ -27,6 +28,8 @@ namespace Microsoft.McpGateway.Management.Service
 
             if (!Regex.IsMatch(request.Name, NamePattern))
                 throw new ArgumentException("Name must contain only lowercase letters, numbers, and dashes.");
+
+            EnsureWorkloadIdentityAllowed(accessContext, request);
 
             var existing = await _store.TryGetAsync(request.Name, cancellationToken).ConfigureAwait(false);
             if (existing != null)
@@ -75,11 +78,19 @@ namespace Microsoft.McpGateway.Management.Service
                 ?? throw new ArgumentException("The adapter does not exist and cannot be updated.");
 
             await EnsureAccessAsync(accessContext, existing, Operation.Write).ConfigureAwait(false);
+            EnsureWorkloadIdentityAllowed(accessContext, request);
 
             // Throw if any change on Unchangeable fields
             if (existing.Name != request.Name)
             {
                 throw new ArgumentException("The adapter does not allow change on the submitted field.");
+            }
+
+            // The workload identity label is part of the StatefulSet selector, which Kubernetes
+            // does not allow patching, so the flag can only be set when the adapter is created.
+            if (existing.UseWorkloadIdentity != request.UseWorkloadIdentity)
+            {
+                throw new ArgumentException("UseWorkloadIdentity cannot be changed after creation. Delete and recreate the adapter instead.");
             }
 
             var updated = AdapterResource.Create(request, existing.CreatedBy, existing.CreatedAt);
@@ -150,6 +161,25 @@ namespace Microsoft.McpGateway.Management.Service
             var operationName = operation.ToString().ToLowerInvariant();
             logger.LogWarning("User {userId} is denied {operation} access for adapter {resourceId}.", accessContext.GetUserId(), operationName, resource.Name.Sanitize());
             throw new UnauthorizedAccessException("You do not have permission to perform the operation.");
+        }
+
+        /// <summary>
+        /// Binding a workload to the cluster's shared federated identity lets the deployed
+        /// container mint tokens for that identity, so it is gated on the caller's role
+        /// rather than on ownership of the adapter being created or updated.
+        /// </summary>
+        private void EnsureWorkloadIdentityAllowed(ClaimsPrincipal accessContext, AdapterData request)
+        {
+            // Evaluated unconditionally so the authorization check is never reached through a
+            // request-controlled branch (avoids CodeQL cs/user-controlled-bypass-of-sensitive-method).
+            var authorized = _workloadIdentityAuthorizer.IsAuthorized(accessContext);
+            if (!request.UseWorkloadIdentity || authorized)
+            {
+                return;
+            }
+
+            logger.LogWarning("User {userId} is denied workload identity for adapter {resourceId}.", accessContext.GetUserId(), request.Name.Sanitize());
+            throw new UnauthorizedAccessException("You do not have permission to enable workload identity.");
         }
     }
 }
