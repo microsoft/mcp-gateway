@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.Security.Claims;
+using System.Text;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
@@ -55,6 +56,84 @@ namespace Microsoft.McpGateway.Service.Tests
             var request = HttpProxy.CreateProxiedHttpRequest(context);
 
             request.Headers.Contains(ForwardedIdentityHeaders.GatewaySecret).Should().BeFalse();
+        }
+
+        [TestMethod]
+        public async Task CreateProxiedHttpRequest_WithRequestBody_CanBeReadTwice()
+        {
+            var body = """{"jsonrpc":"2.0","method":"tools/list"}""";
+            var bodyBytes = Encoding.UTF8.GetBytes(body);
+
+            var context = CreateAuthenticatedContext("/adapters/test/mcp");
+            context.Request.ContentLength = bodyBytes.Length;
+            context.Request.Body = new MemoryStream(bodyBytes);
+
+            var request = HttpProxy.CreateProxiedHttpRequest(context);
+
+            using var firstCopy = new MemoryStream();
+            await request.Content!.CopyToAsync(firstCopy);
+
+            using var secondCopy = new MemoryStream();
+            await request.Content.CopyToAsync(secondCopy);
+
+            Encoding.UTF8.GetString(secondCopy.ToArray())
+                .Should()
+                .Be(body);
+        }
+
+        [TestMethod]
+        public async Task CreateProxiedHttpRequest_WithNonSeekableBody_CanBeReadTwice()
+        {
+            var body = """{"jsonrpc":"2.0","method":"tools/list"}""";
+            var bodyBytes = Encoding.UTF8.GetBytes(body);
+
+            var context = CreateAuthenticatedContext("/adapters/test/mcp");
+            context.Request.ContentLength = bodyBytes.Length;
+            context.Request.Body = new NonSeekableStream(bodyBytes);
+
+            var request = HttpProxy.CreateProxiedHttpRequest(context);
+
+            using var firstCopy = new MemoryStream();
+            await request.Content!.CopyToAsync(firstCopy);
+
+            using var secondCopy = new MemoryStream();
+            await request.Content.CopyToAsync(secondCopy);
+        }
+
+        private sealed class NonSeekableStream(byte[] data) : Stream
+        {
+            private readonly MemoryStream inner = new(data);
+
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => inner.Length;
+
+            public override long Position
+            {
+                get => inner.Position;
+                set => throw new NotSupportedException();
+            }
+
+            public override int Read(byte[] buffer, int offset, int count)
+                => inner.Read(buffer, offset, count);
+
+            public override ValueTask<int> ReadAsync(
+                Memory<byte> buffer,
+                CancellationToken cancellationToken = default)
+                => inner.ReadAsync(buffer, cancellationToken);
+
+            public override long Seek(long offset, SeekOrigin origin)
+                => throw new NotSupportedException();
+
+            public override void SetLength(long value)
+                => throw new NotSupportedException();
+
+            public override void Flush()
+                => throw new NotSupportedException();
+
+            public override void Write(byte[] buffer, int offset, int count)
+                => throw new NotSupportedException();
         }
 
         private static DefaultHttpContext CreateAuthenticatedContext(string path)
