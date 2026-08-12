@@ -25,6 +25,10 @@ namespace Microsoft.McpGateway.Service
             var hasBody = context.Request.ContentLength > 0 ||
                           context.Request.ContentLength is null && !HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method) && !HttpMethods.IsDelete(context.Request.Method) && !HttpMethods.IsOptions(context.Request.Method);
 
+            if (hasBody && !context.Request.Body.CanSeek)
+            {
+                context.Request.EnableBuffering();
+            }
             var requestMessage = new HttpRequestMessage
             {
                 Method = new HttpMethod(context.Request.Method),
@@ -47,6 +51,11 @@ namespace Microsoft.McpGateway.Service
 
                 if (!requestMessage.Headers.TryAddWithoutValidation(header.Key, [.. header.Value]))
                     requestMessage.Content?.Headers.TryAddWithoutValidation(header.Key, [.. header.Value]);
+            }
+
+            if (requestMessage.Content is not null)
+            {
+                requestMessage.Content.Headers.ContentLength = context.Request.ContentLength;
             }
 
             var principal = context.User;
