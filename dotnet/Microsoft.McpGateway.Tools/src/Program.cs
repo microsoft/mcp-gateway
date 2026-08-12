@@ -67,8 +67,33 @@ else
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<IToolDefinitionProvider, StorageToolDefinitionProvider>();
 
-// Register tool executor
-builder.Services.AddSingleton<IToolExecutor, HttpToolExecutor>();
+// Register tool executor. Optionally decorate it with an independent, out-of-band
+// pre-execution judgment gate before a tool call reaches HttpToolExecutor's own RBAC-only
+// (Operation.Read) check -- see ReviewGatedToolExecutor.cs for exactly what gap this closes.
+// Disabled by default; enable with ReviewGate:Enabled=true plus ReviewGate:ApiKey (see
+// README.md, "Optional: pre-execution judgment gate").
+builder.Services.AddSingleton<HttpToolExecutor>();
+if (builder.Configuration.GetValue<bool>("ReviewGate:Enabled"))
+{
+    builder.Services.AddHttpClient("ReviewGate", client =>
+    {
+        client.BaseAddress = new Uri(builder.Configuration.GetValue<string>("ReviewGate:BaseUrl") ?? "https://api.babyblueviper.com");
+        var reviewApiKey = builder.Configuration.GetValue<string>("ReviewGate:ApiKey");
+        if (!string.IsNullOrEmpty(reviewApiKey))
+        {
+            client.DefaultRequestHeaders.Add("Authorization", $"Bearer {reviewApiKey}");
+        }
+    });
+
+    builder.Services.AddSingleton<IToolExecutor>(sp => new ReviewGatedToolExecutor(
+        sp.GetRequiredService<HttpToolExecutor>(),
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient("ReviewGate"),
+        sp.GetRequiredService<ILogger<ReviewGatedToolExecutor>>()));
+}
+else
+{
+    builder.Services.AddSingleton<IToolExecutor>(sp => sp.GetRequiredService<HttpToolExecutor>());
+}
 
 builder.Services.AddMcpServer()
     .WithListToolsHandler(static (c, ct) =>
