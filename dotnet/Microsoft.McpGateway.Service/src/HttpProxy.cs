@@ -53,6 +53,11 @@ namespace Microsoft.McpGateway.Service
                     requestMessage.Content?.Headers.TryAddWithoutValidation(header.Key, [.. header.Value]);
             }
 
+            if (requestMessage.Content is not null)
+            {
+                requestMessage.Content.Headers.ContentLength = context.Request.ContentLength;
+            }
+
             var principal = context.User;
             if (principal?.Identity?.IsAuthenticated == true)
             {
