@@ -40,6 +40,11 @@ Set `useWorkloadIdentity` to be true if need the server to use the workload iden
 ### Proxying Remote Servers
 For proxying another internal mcp server hosted in streamable HTTP. Set the target endpoint in environment variable
   - `MCP_PROXY_URL`
+  - `MCP_PROXY_HEADERS_SECRET_URL` as an optional Azure Key Vault secret URL
+
+The referenced secret must contain a JSON object of upstream HTTP headers. Store
+credentials only in Key Vault. The gateway stores and returns the secret URL,
+but never receives the secret value. Raw `MCP_PROXY_HEADERS` values are rejected.
 
 
 ## Examples
@@ -112,8 +117,38 @@ Others use service-specific variables (e.g., `ADO_MCP_AZURE_TOKEN_CREDENTIALS`)
 }
 ```
 
+#### Example 5: Proxied Authenticated MCP Server
+
+Prefer the upstream provider's OAuth flow when available. For a server that
+requires a static bearer token, store this JSON in Key Vault:
+
+```json
+{"Authorization":"Bearer <token>"}
+```
+
+Grant the adapter workload identity permission to read that secret. Then submit
+only its URL through the management API:
+
+```json
+{
+    "name": "authenticated-remote",
+    "imageName": "mcp-proxy",
+    "imageVersion": "1.0.0",
+    "environmentVariables": {
+      "MCP_PROXY_URL": "https://mcp.example.com/mcp",
+      "MCP_PROXY_HEADERS_SECRET_URL": "https://<vault>.vault.azure.net/secrets/<secret-name>"
+    },
+    "useWorkloadIdentity": true,
+    "description": "Proxied authenticated MCP server"
+}
+```
+
 ## Security Considerations
 
 Before running in production
 - Implement appropriate access controls on the gateway level to prevent users from exploiting the workload identity access through it.
 - Always only register trusted MCP servers, enable network access policies on the server pods.
+- Do not put credentials in adapter `environmentVariables`; management GET and LIST responses include those values.
+- Store proxy headers in Key Vault and pass only `MCP_PROXY_HEADERS_SECRET_URL`.
+- Use an `https://` upstream whenever proxy headers are configured.
+- The proxy rejects redirects, malformed headers, control characters, and non-ASCII header values before connecting upstream.
