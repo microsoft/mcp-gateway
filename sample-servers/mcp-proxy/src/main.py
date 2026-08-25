@@ -1,13 +1,19 @@
-from fastmcp import FastMCP
-import os, sys, shlex
-import validators
+import os
+import shlex
+import sys
+from typing import NoReturn
+
+from fastmcp.server import create_proxy
+from proxy_config import ProxyConfigurationError, remote_transport_from_environment
 
 MAX_ARGS = 64
 MAX_ARG_LEN = 512
 
-def bad(msg: str):
+
+def bad(msg: str) -> NoReturn:
     print(f"[shim] {msg}", file=sys.stderr)
     sys.exit(1)
+
 
 def safe(arg: str) -> bool:
     return (
@@ -18,18 +24,14 @@ def safe(arg: str) -> bool:
         and "\r" not in arg
     )
 
+
 proxy_url = os.environ.get("MCP_PROXY_URL")
 if proxy_url:
-    if not validators.url(proxy_url):
-        bad("Invalid MCP_PROXY_URL: must be http(s) and a well-formed URL")
-    config = {
-        "mcpServers": {
-            "default": {
-                "url": proxy_url,
-                "transport": "http"
-            }
-        }
-    }
+    try:
+        transport = remote_transport_from_environment(os.environ)
+    except ProxyConfigurationError as error:
+        bad(str(error))
+    app = create_proxy(transport, name="MCP Proxy Server")
 else:
     cmd = os.environ.get("MCP_COMMAND")
     if not cmd:
@@ -45,18 +47,17 @@ else:
         if not safe(a):
             bad(f"Unsafe arg: {a!r}")
 
-    config = {
+    config: dict[str, object] = {
         "mcpServers": {
             "default": {
                 "type": "stdio",
                 "command": cmd,
                 "args": args,
-                "env": dict(os.environ)
+                "env": dict(os.environ),
             }
         }
     }
-
-app = FastMCP.as_proxy(config, name="MCP Proxy Server")
+    app = create_proxy(config, name="MCP Proxy Server")
 
 if __name__ == "__main__":
     app.settings.host = "127.0.0.1"
