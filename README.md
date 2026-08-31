@@ -688,6 +688,10 @@ az group delete --name <resourceGroupName> --yes
   Set up OAuth 2.0 with Azure Entra ID (AAD) for authentication.
   Implement fine-grained access control using RBAC or custom ACLs for `adapter` level permissions.
 
+## Optional TOA lifecycle gate
+
+Before promoting adapters/tools, you can optionally verify offline [Tool Outcome Attestation](https://github.com/Carmel-Labs-Inc/toa) (`toa/0.1`). See [docs/toa-optional-lifecycle-gate.md](docs/toa-optional-lifecycle-gate.md). Not per-call signing.
+
 ## Contributing
 
 This project welcomes contributions and suggestions.  Most contributions require you to agree to a
