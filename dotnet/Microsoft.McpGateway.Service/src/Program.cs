@@ -5,16 +5,16 @@ using Azure.Identity;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Azure.Cosmos;
-using Microsoft.Azure.Cosmos.Fluent;
 using Microsoft.Identity.Web;
+using Microsoft.Extensions.Options;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Foundry;
 using Microsoft.McpGateway.Management.Service;
 using Microsoft.McpGateway.Management.Store;
+using Microsoft.McpGateway.Service;
 using Microsoft.McpGateway.Service.Authentication;
 using Microsoft.McpGateway.Service.Routing;
-using Microsoft.McpGateway.Service.Session;
 using ModelContextProtocol.AspNetCore.Authentication;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -24,11 +24,10 @@ var credential = new DefaultAzureCredential();
 
 builder.Services.AddApplicationInsightsTelemetry();
 builder.Services.AddLogging();
+builder.Services.Configure<GatewayKubernetesOptions>(builder.Configuration.GetSection("Kubernetes"));
 
 builder.Services.AddSingleton<IKubernetesClientFactory, LocalKubernetesClientFactory>();
-builder.Services.AddSingleton<IAdapterSessionStore, DistributedMemorySessionStore>();
 builder.Services.AddSingleton<IServiceNodeInfoProvider, AdapterKubernetesNodeInfoProvider>();
-builder.Services.AddSingleton<ISessionRoutingHandler, AdapterSessionRoutingHandler>();
 
 // Operators can opt out of Entra ID and run the gateway with the dev auth
 // handler (X-Dev-* headers) by setting `Authentication__BypassEntra=true`
@@ -109,8 +108,8 @@ else
         {
             options.ResourceMetadata = new()
             {
-                Resource = new Uri(builder.Configuration.GetValue<string>("PublicOrigin")!),
-                AuthorizationServers = { new Uri($"https://login.microsoftonline.com/{azureAdConfig["TenantId"]}/v2.0") },
+                Resource = builder.Configuration.GetValue<string>("PublicOrigin")!,
+                AuthorizationServers = { $"https://login.microsoftonline.com/{azureAdConfig["TenantId"]}/v2.0" },
                 ScopesSupported = [$"api://{azureAdConfig["ClientId"]}/.default"]
             };
         })
@@ -154,19 +153,12 @@ else
         return new CosmosSessionResourceStore(cosmosClient, cosmosConfig["DatabaseName"]!, "SessionContainer", logger);
     });
     
-    builder.Services.AddCosmosCache(options =>
-    {
-        options.ContainerName = "CacheContainer";
-        options.DatabaseName = cosmosConfig["DatabaseName"]!;
-        options.CreateIfNotExists = true;
-        options.ClientBuilder = new CosmosClientBuilder(cosmosConfig["AccountEndpoint"], credential);
-    });
 }
 
 builder.Services.AddSingleton<IKubeClientWrapper>(c =>
 {
     var kubeClientFactory = c.GetRequiredService<IKubernetesClientFactory>();
-    return new KubeClient(kubeClientFactory, "adapter");
+    return new KubeClient(kubeClientFactory, c.GetRequiredService<IOptions<GatewayKubernetesOptions>>().Value.Namespace);
 });
 builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
 
@@ -186,7 +178,7 @@ builder.Services.AddSingleton<IWorkloadIdentityAuthorizer, WorkloadIdentityAutho
 builder.Services.AddSingleton<IAdapterDeploymentManager>(c =>
 {
     var config = builder.Configuration.GetSection("ContainerRegistrySettings");
-    return new KubernetesAdapterDeploymentManager(config["Endpoint"]!, c.GetRequiredService<IKubeClientWrapper>(), c.GetRequiredService<ILogger<KubernetesAdapterDeploymentManager>>());
+    return new KubernetesAdapterDeploymentManager(config["Endpoint"]!, c.GetRequiredService<IKubeClientWrapper>(), c.GetRequiredService<ILogger<KubernetesAdapterDeploymentManager>>(), c.GetRequiredService<IOptions<GatewayKubernetesOptions>>());
 });
 builder.Services.AddSingleton<IAdapterManagementService, AdapterManagementService>();
 builder.Services.AddSingleton<IToolManagementService, ToolManagementService>();
@@ -213,6 +205,8 @@ if (!string.IsNullOrWhiteSpace(foundrySection["Endpoint"]))
 builder.Services.AddAuthorization();
 builder.Services.AddControllers();
 builder.Services.AddHttpClient();
+builder.Services.AddHttpClient(Microsoft.McpGateway.Service.Constants.HttpClientNames.AdapterProxyClient)
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
 
 builder.WebHost.ConfigureKestrel(options =>
 {
@@ -228,6 +222,7 @@ var app = builder.Build();
 app.UseStaticFiles();
 
 // Configure the HTTP request pipeline.
+app.UseMiddleware<McpEndpointMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 

@@ -10,12 +10,43 @@ param resourceLabel string = resourceGroup().name
 @description('The Azure region for resource deployment. Defaults to the resource group location.')
 param location string = resourceGroup().location
 
-@description('Enable private endpoints for Azure resources (ACR, Cosmos DB). When enabled, resources will only be accessible within the VNet.')
+@description('Enable a private endpoint and DNS link for Cosmos DB and disable its public access. Does not configure private ACR access.')
 param enablePrivateEndpoints bool = false
 
 @description('Enable Kubernetes deployment script. Set to false when using external PowerShell script for deployment.')
 param enableKubernetesDeploymentScript bool = true
 
+@minValue(1)
+@description('AKS node count. Use one only for an isolated short-lived test.')
+param nodeCount int = 2
+
+@description('AKS system-pool VM size; must meet current AKS system-node requirements.')
+param nodeVmSize string = 'Standard_D4ds_v5'
+
+@allowed(['Basic', 'Standard', 'Premium'])
+param acrSku string = 'Standard'
+
+@description('Use consumption-based Cosmos DB for a new test account. Not an in-place account conversion.')
+param cosmosServerless bool = false
+
+@secure()
+@description('Base64 PFX certificate for the public HTTPS listener. Supply for authenticated cloud access.')
+param tlsCertificateData string = ''
+
+@secure()
+param tlsCertificatePassword string = ''
+
+@description('Exact gateway image to deploy; set to the image built from the checkout being validated.')
+param gatewayImage string = 'ghcr.io/microsoft/mcp-gateway:latest'
+
+@description('Exact first-party tool gateway image to deploy.')
+param toolGatewayImage string = 'ghcr.io/microsoft/tool-gateway:latest'
+
+@secure()
+@description('Shared first-party identity-forwarding secret; never supplied to adapter pods.')
+param gatewaySecret string = ''
+
+var tlsEnabled = !empty(tlsCertificateData)
 var resourceLabelLower = toLower(resourceLabel)
 
 var aksNameBase = 'mg-aks-${resourceLabelLower}'
@@ -108,7 +139,7 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-01-01-preview' = {
   name: acrName
   location: location
   sku: {
-    name: 'Standard'
+    name: acrSku
   }
   properties: {
     policies: {
@@ -136,8 +167,8 @@ resource aks 'Microsoft.ContainerService/managedClusters@2023-04-01' = {
     agentPoolProfiles: [
       {
         name: 'nodepool1'
-        count: 2
-        vmSize: 'Standard_D4ds_v5'
+        count: nodeCount
+        vmSize: nodeVmSize
         osType: 'Linux'
         mode: 'System'
         osSKU: 'Ubuntu'
@@ -151,6 +182,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2023-04-01' = {
     }
     networkProfile: {
       networkPlugin: 'azure'
+      networkPolicy: 'azure'
       loadBalancerSku: 'standard'
       serviceCidr: '192.168.0.0/16'
       dnsServiceIP: '192.168.0.10'
@@ -208,6 +240,19 @@ resource appGw 'Microsoft.Network/applicationGateways@2022-09-01' = {
       tier: 'Standard_v2'
       capacity: 1
     }
+    globalConfiguration: {
+      enableRequestBuffering: false
+      enableResponseBuffering: false
+    }
+    sslCertificates: tlsEnabled ? [
+      {
+        name: 'gateway-tls'
+        properties: {
+          data: tlsCertificateData
+          password: tlsCertificatePassword
+        }
+      }
+    ] : []
     gatewayIPConfigurations: [
       {
         name: 'appGwIpConfig'
@@ -232,7 +277,7 @@ resource appGw 'Microsoft.Network/applicationGateways@2022-09-01' = {
       {
         name: 'httpPort'
         properties: {
-          port: 80
+          port: tlsEnabled ? 443 : 80
         }
       }
     ]
@@ -255,7 +300,7 @@ resource appGw 'Microsoft.Network/applicationGateways@2022-09-01' = {
           port: 8000
           protocol: 'Http'
           pickHostNameFromBackendAddress: false
-          requestTimeout: 20
+          requestTimeout: 600
           probe: {
             id: resourceId('Microsoft.Network/applicationGateways/probes', appGwName, 'mcpgateway-probe')
           }
@@ -272,7 +317,10 @@ resource appGw 'Microsoft.Network/applicationGateways@2022-09-01' = {
           frontendPort: {
             id: resourceId('Microsoft.Network/applicationGateways/frontendPorts', appGwName, 'httpPort')
           }
-          protocol: 'Http'
+          protocol: tlsEnabled ? 'Https' : 'Http'
+          sslCertificate: tlsEnabled ? {
+            id: resourceId('Microsoft.Network/applicationGateways/sslCertificates', appGwName, 'gateway-tls')
+          } : null
         }
       }
     ]
@@ -396,7 +444,8 @@ resource cosmosDb 'Microsoft.DocumentDB/databaseAccounts@2023-04-15' = {
         failoverPriority: 0
       }
     ]
-    capabilities: []
+    capabilities: cosmosServerless ? [{ name: 'EnableServerless' }] : []
+    disableLocalAuth: true
     consistencyPolicy: {
       defaultConsistencyLevel: 'Session'
     }
@@ -559,6 +608,10 @@ resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01'
       sed -i "s|\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g" cloud-deployment-template.yml
       sed -i "s|\${IDENTIFIER}|$IDENTIFIER|g" cloud-deployment-template.yml
       sed -i "s|\${REGION}|$REGION|g" cloud-deployment-template.yml
+      sed -i "s|\${GATEWAY_IMAGE}|$GATEWAY_IMAGE|g" cloud-deployment-template.yml
+      sed -i "s|\${TOOL_GATEWAY_IMAGE}|$TOOL_GATEWAY_IMAGE|g" cloud-deployment-template.yml
+      sed -i "s|\${PUBLIC_ORIGIN}|$PUBLIC_ORIGIN|g" cloud-deployment-template.yml
+      sed -i "s|\${GATEWAY_SECRET}|$GATEWAY_SECRET|g" cloud-deployment-template.yml
 
       az aks command invoke -g $ResourceGroupName -n mg-aks-"$ResourceGroupName" --command "kubectl apply -f cloud-deployment-template.yml" --file cloud-deployment-template.yml
     '''
@@ -566,6 +619,22 @@ resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01'
       'https://raw.githubusercontent.com/microsoft/mcp-gateway/refs/heads/main/deployment/k8s/cloud-deployment-template.yml'
     ]
     environmentVariables: [
+      {
+        name: 'GATEWAY_IMAGE'
+        value: gatewayImage
+      }
+      {
+        name: 'TOOL_GATEWAY_IMAGE'
+        value: toolGatewayImage
+      }
+      {
+        name: 'PUBLIC_ORIGIN'
+        value: '${tlsEnabled ? 'https' : 'http'}://${publicIpDnsLabel}.${location}.cloudapp.azure.com/'
+      }
+      {
+        name: 'GATEWAY_SECRET'
+        secureValue: gatewaySecret
+      }
       {
         name: 'REGION'
         value: location
@@ -615,3 +684,4 @@ output resourceLabel string = resourceLabel
 output tenantId string = tenant().tenantId
 output location string = location
 output publicIpFqdn string = appGwPublicIp.properties.dnsSettings.fqdn
+output publicOrigin string = '${tlsEnabled ? 'https' : 'http'}://${appGwPublicIp.properties.dnsSettings.fqdn}/'

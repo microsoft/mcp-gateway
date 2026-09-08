@@ -2,7 +2,7 @@
   "openapi": "3.0.1",
   "info": {
     "title": "MCP Gateway Mangement API",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "description": "RESTful APIs for MCP Server Management"
   },
     "servers": [
@@ -461,40 +461,118 @@
     },
     "/mcp": {
       "post": {
-        "summary": "Establish a streamable HTTP connection to the tool gateway router",
-        "description": "Routes MCP requests to the tool gateway router, which dynamically routes to registered tools based on tool definitions. The router handles multiple instances behind the gateway for scalability.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "description": "MCP protocol request payload"
-              }
-            }
-          }
-        },
+        "summary": "Send a stateless MCP request to the tool gateway",
+        "description": "Requires MCP 2026-07-28. Every request is independently authorized; no initialize handshake or transport session is supported. Caller-filtered tool catalogs are private. Annotated tool parameters require matching Mcp-Param-* headers. GET and DELETE are not supported.",
+        "parameters": [
+          { "$ref": "#/components/parameters/McpProtocolVersion" },
+          { "$ref": "#/components/parameters/McpMethod" },
+          { "$ref": "#/components/parameters/McpName" },
+          { "$ref": "#/components/parameters/McpAccept" }
+        ],
+        "requestBody": { "$ref": "#/components/requestBodies/McpRequest" },
         "responses": {
-          "200": {
-            "description": "MCP response from the tool gateway router",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "description": "MCP protocol response payload"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Service unavailable - no router instances available"
-          }
+          "200": { "$ref": "#/components/responses/McpResponse" },
+          "400": { "$ref": "#/components/responses/McpBadRequest" },
+          "401": { "description": "Authentication required" },
+          "403": { "description": "Access denied or supplied Origin not allowed" },
+          "404": { "description": "Unknown MCP method; backend JSON-RPC error is preserved" },
+          "405": { "$ref": "#/components/responses/McpMethodNotAllowed" },
+          "503": { "description": "No ready tool gateway instances" }
+        }
+      }
+    },
+    "/adapters/{name}/mcp": {
+      "post": {
+        "summary": "Send a stateless MCP request to an adapter",
+        "description": "Requires a MCP 2026-07-28 adapter and client. Independently selects a ready adapter pod after authorizing access. Legacy session headers and session_id query values do not affect routing. Backend errors and request-scoped SSE are preserved; subscriptions/listen is forwarded when implemented by the adapter. GET and DELETE are not supported.",
+        "parameters": [
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "$ref": "#/components/parameters/McpProtocolVersion" },
+          { "$ref": "#/components/parameters/McpMethod" },
+          { "$ref": "#/components/parameters/McpName" },
+          { "$ref": "#/components/parameters/McpAccept" }
+        ],
+        "requestBody": { "$ref": "#/components/requestBodies/McpRequest" },
+        "responses": {
+          "200": { "$ref": "#/components/responses/McpResponse" },
+          "400": { "$ref": "#/components/responses/McpBadRequest" },
+          "401": { "description": "Authentication required" },
+          "403": { "description": "Adapter access denied or supplied Origin not allowed" },
+          "404": { "description": "Adapter or MCP method not found; backend error bodies are preserved" },
+          "405": { "$ref": "#/components/responses/McpMethodNotAllowed" },
+          "503": { "description": "No ready adapter instances" }
         }
       }
     }
   },
   "components": {
+    "parameters": {
+      "McpProtocolVersion": {
+        "name": "MCP-Protocol-Version", "in": "header", "required": true,
+        "description": "Must match params._meta protocolVersion. Legacy and unknown revisions are rejected.",
+        "schema": { "type": "string", "enum": ["2026-07-28"] }
+      },
+      "McpMethod": {
+        "name": "Mcp-Method", "in": "header", "required": true,
+        "description": "Must match the JSON-RPC method.", "schema": { "type": "string" }
+      },
+      "McpName": {
+        "name": "Mcp-Name", "in": "header",
+        "description": "Required for tools/call and prompts/get (params.name) and resources/read (params.uri). Use the MCP Base64 sentinel encoding for unsafe header values. Mcp-Param-* headers similarly mirror schema-annotated arguments.",
+        "schema": { "type": "string" }
+      },
+      "McpAccept": {
+        "name": "Accept", "in": "header", "required": true,
+        "schema": { "type": "string", "example": "application/json, text/event-stream" }
+      }
+    },
+    "requestBodies": {
+      "McpRequest": {
+        "required": true,
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/McpRequest" } } }
+      }
+    },
+    "responses": {
+      "McpResponse": {
+        "description": "JSON-RPC response or an incremental SSE response scoped to this request. Modern results include resultType; complete discovery/list/read results carry ttlMs and cacheScope. A subscription stream stays open until cancelled or completed. No transport session ID is returned.",
+        "content": {
+          "application/json": { "schema": { "type": "object" } },
+          "text/event-stream": { "schema": { "type": "string" } }
+        }
+      },
+      "McpBadRequest": {
+        "description": "Missing/malformed headers or metadata, HeaderMismatch (-32020), MissingRequiredClientCapability (-32021), or UnsupportedProtocolVersion (-32022). Backend status and error body are preserved; no legacy fallback.",
+        "content": { "application/json": { "schema": { "type": "object" } } }
+      },
+      "McpMethodNotAllowed": {
+        "description": "MCP endpoints support POST, not standalone GET streams or session DELETE.",
+        "headers": { "Allow": { "schema": { "type": "string", "example": "POST" } } }
+      }
+    },
     "schemas": {
+      "McpRequest": {
+        "type": "object",
+        "required": ["jsonrpc", "id", "method", "params"],
+        "properties": {
+          "jsonrpc": { "type": "string", "enum": ["2.0"] },
+          "id": { "oneOf": [{ "type": "integer" }, { "type": "string" }] },
+          "method": { "type": "string", "example": "server/discover" },
+          "params": {
+            "type": "object", "required": ["_meta"], "additionalProperties": true,
+            "properties": {
+              "_meta": {
+                "type": "object",
+                "required": ["io.modelcontextprotocol/protocolVersion", "io.modelcontextprotocol/clientCapabilities"],
+                "properties": {
+                  "io.modelcontextprotocol/protocolVersion": { "type": "string", "enum": ["2026-07-28"] },
+                  "io.modelcontextprotocol/clientCapabilities": { "type": "object" },
+                  "io.modelcontextprotocol/clientInfo": { "type": "object", "description": "Optional self-reported implementation metadata, not authenticated identity." }
+                }
+              }
+            }
+          }
+        }
+      },
       "Adapter": {
         "type": "object",
         "properties": {

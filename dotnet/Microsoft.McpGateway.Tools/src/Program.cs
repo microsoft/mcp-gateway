@@ -5,6 +5,8 @@ using Azure.Identity;
 using Microsoft.Azure.Cosmos;
 using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Management.Authorization;
+using Microsoft.McpGateway.Management.Contracts;
+using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Tools.Contracts;
 using Microsoft.McpGateway.Tools.Services;
 using System.Linq;
@@ -16,6 +18,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Add logging
 builder.Services.AddLogging();
+builder.Services.Configure<GatewayKubernetesOptions>(builder.Configuration.GetSection("Kubernetes"));
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
@@ -70,7 +73,7 @@ builder.Services.AddSingleton<IToolDefinitionProvider, StorageToolDefinitionProv
 // Register tool executor
 builder.Services.AddSingleton<IToolExecutor, HttpToolExecutor>();
 
-builder.Services.AddMcpServer()
+builder.Services.AddMcpServer(options => options.ProtocolVersion = McpProtocol.Version)
     .WithListToolsHandler(static (c, ct) =>
     {
         var toolDefinitionProvider = c.Services!.GetRequiredService<IToolDefinitionProvider>();
@@ -81,7 +84,7 @@ builder.Services.AddMcpServer()
         var toolExecutor = c.Services!.GetRequiredService<IToolExecutor>();
         return toolExecutor?.ExecuteToolAsync(c, ct) ?? throw new InvalidOperationException("Tool executor not properly registered.");
     })
-    .WithHttpTransport();
+    .WithHttpTransport(options => options.Stateless = true);
 
 
 builder.WebHost.ConfigureKestrel(options =>

@@ -35,11 +35,20 @@ spec:
         - name: mcpgateway-container
           image: localhost:5000/microsoft-mcpgateway-service:latest
           imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           ports:
             - containerPort: 8000
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: "Development"
+            - name: Storage__UseInMemoryStores
+              value: "false"
             - name: Redis__ConnectionString
               valueFrom:
                 secretKeyRef:
@@ -128,6 +137,13 @@ spec:
         - name: toolgateway-container
           image: localhost:5000/microsoft-mcpgateway-tools:latest
           imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           ports:
             - containerPort: 8000
           env:
@@ -270,8 +286,10 @@ metadata:
   namespace: adapter
 spec:
   podSelector:
-    matchLabels:
-      adapter/type: mcp
+    matchExpressions:
+      - key: adapter/type
+        operator: In
+        values: [mcp, tool]
   policyTypes:
     - Ingress
   ingress:

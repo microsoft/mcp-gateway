@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using Microsoft.AspNetCore.Http.Extensions;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Net.Http.Headers;
 using Microsoft.McpGateway.Management.Authorization;
@@ -38,6 +39,14 @@ namespace Microsoft.McpGateway.Service
 
             foreach (var header in context.Request.Headers)
             {
+                if (string.Equals(header.Key, "Mcp-Session-Id", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(header.Key, "Last-Event-ID", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(header.Key, HeaderNames.Host, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(header.Key, HeaderNames.Connection, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(header.Key, HeaderNames.TransferEncoding, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(header.Key, "Forwarded", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
                 // Skip the inbound Authorization header
                 if (string.Equals(header.Key, HeaderNames.Authorization, StringComparison.OrdinalIgnoreCase))
                     continue;
@@ -100,10 +109,11 @@ namespace Microsoft.McpGateway.Service
             "Retry-After",
             "X-Request-Id",
             "X-Correlation-Id",
-            "mcp-session-id",
+            "X-Accel-Buffering",
+            "Allow",
         };
 
-        public static Task CopyProxiedHttpResponseAsync(HttpContext context, HttpResponseMessage response, CancellationToken cancellationToken)
+        public static async Task CopyProxiedHttpResponseAsync(HttpContext context, HttpResponseMessage response, CancellationToken cancellationToken)
         {
             context.Response.StatusCode = (int)response.StatusCode;
 
@@ -120,7 +130,22 @@ namespace Microsoft.McpGateway.Service
 
             context.Response.Headers.Remove(HeaderNames.TransferEncoding);
 
-            return response.Content.CopyToAsync(context.Response.Body, cancellationToken);
+            if (!string.Equals(response.Content.Headers.ContentType?.MediaType, "text/event-stream", StringComparison.OrdinalIgnoreCase))
+            {
+                await response.Content.CopyToAsync(context.Response.Body, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
+            context.Response.Headers["X-Accel-Buffering"] = "no";
+            var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            var buffer = new byte[8192];
+            int bytesRead;
+            while ((bytesRead = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) != 0)
+            {
+                await context.Response.Body.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken).ConfigureAwait(false);
+                await context.Response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 }

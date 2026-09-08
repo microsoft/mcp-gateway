@@ -31,7 +31,7 @@ spec:
       serviceAccountName: mcpgateway-sa
       containers:
         - name: mcpgateway-container
-          image: ghcr.io/microsoft/mcp-gateway:latest
+          image: ${GATEWAY_IMAGE}
           ports:
             - containerPort: 8000
           env:
@@ -134,7 +134,7 @@ data:
 
   ContainerRegistrySettings__Endpoint: "mgreg${IDENTIFIER}.azurecr.io"
 
-  PublicOrigin: "http://${IDENTIFIER}.${REGION}.cloudapp.azure.com/"
+  PublicOrigin: "${PUBLIC_ORIGIN}"
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -157,7 +157,7 @@ spec:
       serviceAccountName: mcpgateway-sa
       containers:
         - name: toolgateway-container
-          image: ghcr.io/microsoft/tool-gateway:latest
+          image: ${TOOL_GATEWAY_IMAGE}
           ports:
             - containerPort: 8000
           env:
@@ -229,8 +229,10 @@ metadata:
   namespace: adapter
 spec:
   podSelector:
-    matchLabels:
-      adapter/type: mcp
+    matchExpressions:
+      - key: adapter/type
+        operator: In
+        values: [mcp, tool]
   policyTypes:
     - Ingress
   ingress:

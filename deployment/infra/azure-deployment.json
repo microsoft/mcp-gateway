@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.38.33.27573",
-      "templateHash": "5648627402420051357"
+      "version": "0.42.1.51946",
+      "templateHash": "3808630452460102996"
     }
   },
   "parameters": {
@@ -35,11 +35,82 @@
       "type": "bool",
       "defaultValue": false,
       "metadata": {
-        "description": "Enable private endpoints for Azure resources (ACR, Cosmos DB). When enabled, resources will only be accessible within the VNet."
+        "description": "Enable a private endpoint and DNS link for Cosmos DB and disable its public access. Does not configure private ACR access."
+      }
+    },
+    "enableKubernetesDeploymentScript": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable Kubernetes deployment script. Set to false when using external PowerShell script for deployment."
+      }
+    },
+    "nodeCount": {
+      "type": "int",
+      "defaultValue": 2,
+      "minValue": 1,
+      "metadata": {
+        "description": "AKS node count. Use one only for an isolated short-lived test."
+      }
+    },
+    "nodeVmSize": {
+      "type": "string",
+      "defaultValue": "Standard_D4ds_v5",
+      "metadata": {
+        "description": "AKS system-pool VM size; must meet current AKS system-node requirements."
+      }
+    },
+    "acrSku": {
+      "type": "string",
+      "defaultValue": "Standard",
+      "allowedValues": [
+        "Basic",
+        "Standard",
+        "Premium"
+      ]
+    },
+    "cosmosServerless": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Use consumption-based Cosmos DB for a new test account. Not an in-place account conversion."
+      }
+    },
+    "tlsCertificateData": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Base64 PFX certificate for the public HTTPS listener. Supply for authenticated cloud access."
+      }
+    },
+    "tlsCertificatePassword": {
+      "type": "securestring",
+      "defaultValue": ""
+    },
+    "gatewayImage": {
+      "type": "string",
+      "defaultValue": "ghcr.io/microsoft/mcp-gateway:latest",
+      "metadata": {
+        "description": "Exact gateway image to deploy; set to the image built from the checkout being validated."
+      }
+    },
+    "toolGatewayImage": {
+      "type": "string",
+      "defaultValue": "ghcr.io/microsoft/tool-gateway:latest",
+      "metadata": {
+        "description": "Exact first-party tool gateway image to deploy."
+      }
+    },
+    "gatewaySecret": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Shared first-party identity-forwarding secret; never supplied to adapter pods."
       }
     }
   },
   "variables": {
+    "tlsEnabled": "[not(empty(parameters('tlsCertificateData')))]",
     "resourceLabelLower": "[toLower(parameters('resourceLabel'))]",
     "aksNameBase": "[format('mg-aks-{0}', variables('resourceLabelLower'))]",
     "aksName": "[substring(variables('aksNameBase'), 0, min(length(variables('aksNameBase')), 63))]",
@@ -107,7 +178,7 @@
     {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
-      "scope": "[format('Microsoft.Network/virtualNetworks/{0}', variables('vnetName'))]",
+      "scope": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]",
       "name": "[guid(variables('vnetName'), variables('aksName'), variables('aksSubnetName'), 'network-contributor')]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4d97b98b-1d4f-4787-a291-c67834d212e7')]",
@@ -125,7 +196,7 @@
       "name": "[variables('acrName')]",
       "location": "[parameters('location')]",
       "sku": {
-        "name": "Standard"
+        "name": "[parameters('acrSku')]"
       },
       "properties": {
         "policies": {
@@ -153,8 +224,8 @@
         "agentPoolProfiles": [
           {
             "name": "nodepool1",
-            "count": 2,
-            "vmSize": "Standard_D4ds_v5",
+            "count": "[parameters('nodeCount')]",
+            "vmSize": "[parameters('nodeVmSize')]",
             "osType": "Linux",
             "mode": "System",
             "osSKU": "Ubuntu",
@@ -168,6 +239,7 @@
         },
         "networkProfile": {
           "networkPlugin": "azure",
+          "networkPolicy": "azure",
           "loadBalancerSku": "standard",
           "serviceCidr": "192.168.0.0/16",
           "dnsServiceIP": "192.168.0.10"
@@ -192,7 +264,7 @@
     {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
-      "scope": "[format('Microsoft.ContainerRegistry/registries/{0}', variables('acrName'))]",
+      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', variables('acrName'))]",
       "name": "[guid(resourceId('Microsoft.ContainerService/managedClusters', variables('aksName')), resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), 'acrpull')]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
@@ -230,6 +302,11 @@
           "tier": "Standard_v2",
           "capacity": 1
         },
+        "globalConfiguration": {
+          "enableRequestBuffering": false,
+          "enableResponseBuffering": false
+        },
+        "sslCertificates": "[if(variables('tlsEnabled'), createArray(createObject('name', 'gateway-tls', 'properties', createObject('data', parameters('tlsCertificateData'), 'password', parameters('tlsCertificatePassword')))), createArray())]",
         "gatewayIPConfigurations": [
           {
             "name": "appGwIpConfig",
@@ -254,7 +331,7 @@
           {
             "name": "httpPort",
             "properties": {
-              "port": 80
+              "port": "[if(variables('tlsEnabled'), 443, 80)]"
             }
           }
         ],
@@ -277,7 +354,7 @@
               "port": 8000,
               "protocol": "Http",
               "pickHostNameFromBackendAddress": false,
-              "requestTimeout": 20,
+              "requestTimeout": 600,
               "probe": {
                 "id": "[resourceId('Microsoft.Network/applicationGateways/probes', variables('appGwName'), 'mcpgateway-probe')]"
               }
@@ -294,7 +371,8 @@
               "frontendPort": {
                 "id": "[resourceId('Microsoft.Network/applicationGateways/frontendPorts', variables('appGwName'), 'httpPort')]"
               },
-              "protocol": "Http"
+              "protocol": "[if(variables('tlsEnabled'), 'Https', 'Http')]",
+              "sslCertificate": "[if(variables('tlsEnabled'), createObject('id', resourceId('Microsoft.Network/applicationGateways/sslCertificates', variables('appGwName'), 'gateway-tls')), null())]"
             }
           }
         ],
@@ -363,7 +441,7 @@
     {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
-      "scope": "[format('Microsoft.ContainerService/managedClusters/{0}', variables('aksName'))]",
+      "scope": "[resourceId('Microsoft.ContainerService/managedClusters', variables('aksName'))]",
       "name": "[guid(variables('aksName'), format('{0}-admin', variables('userAssignedIdentityName')), 'AKSContributor')]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ed7f3fbd-7b88-4dd4-9017-9adb7ce333f8')]",
@@ -378,7 +456,7 @@
     {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
-      "scope": "[format('Microsoft.ContainerService/managedClusters/{0}', variables('aksName'))]",
+      "scope": "[resourceId('Microsoft.ContainerService/managedClusters', variables('aksName'))]",
       "name": "[guid(variables('aksName'), format('{0}-admin', variables('userAssignedIdentityName')), 'AKSRBACAdmin')]",
       "properties": {
         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b')]",
@@ -436,7 +514,8 @@
             "failoverPriority": 0
           }
         ],
-        "capabilities": [],
+        "capabilities": "[if(parameters('cosmosServerless'), createArray(createObject('name', 'EnableServerless')), createArray())]",
+        "disableLocalAuth": true,
         "consistencyPolicy": {
           "defaultConsistencyLevel": "Session"
         },
@@ -610,6 +689,7 @@
       }
     },
     {
+      "condition": "[parameters('enableKubernetesDeploymentScript')]",
       "type": "Microsoft.Resources/deploymentScripts",
       "apiVersion": "2023-08-01",
       "name": "kubernetesDeployment",
@@ -625,11 +705,27 @@
         "azCliVersion": "2.60.0",
         "timeout": "PT30M",
         "retentionInterval": "P1D",
-        "scriptContent": "      sed -i \"s|\\${AZURE_CLIENT_ID}|$AZURE_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${WORKLOAD_CLIENT_ID}|$WORKLOAD_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${TENANT_ID}|$TENANT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${CLIENT_ID}|$CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${IDENTIFIER}|$IDENTIFIER|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${REGION}|$REGION|g\" cloud-deployment-template.yml\r\n\r\n      az aks command invoke -g $ResourceGroupName -n mg-aks-\"$ResourceGroupName\" --command \"kubectl apply -f cloud-deployment-template.yml\" --file cloud-deployment-template.yml\r\n    ",
+        "scriptContent": "      sed -i \"s|\\${AZURE_CLIENT_ID}|$AZURE_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${WORKLOAD_CLIENT_ID}|$WORKLOAD_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${TENANT_ID}|$TENANT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${CLIENT_ID}|$CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${IDENTIFIER}|$IDENTIFIER|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${REGION}|$REGION|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${GATEWAY_IMAGE}|$GATEWAY_IMAGE|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${TOOL_GATEWAY_IMAGE}|$TOOL_GATEWAY_IMAGE|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${PUBLIC_ORIGIN}|$PUBLIC_ORIGIN|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${GATEWAY_SECRET}|$GATEWAY_SECRET|g\" cloud-deployment-template.yml\r\n\r\n      az aks command invoke -g $ResourceGroupName -n mg-aks-\"$ResourceGroupName\" --command \"kubectl apply -f cloud-deployment-template.yml\" --file cloud-deployment-template.yml\r\n    ",
         "supportingScriptUris": [
           "https://raw.githubusercontent.com/microsoft/mcp-gateway/refs/heads/main/deployment/k8s/cloud-deployment-template.yml"
         ],
         "environmentVariables": [
+          {
+            "name": "GATEWAY_IMAGE",
+            "value": "[parameters('gatewayImage')]"
+          },
+          {
+            "name": "TOOL_GATEWAY_IMAGE",
+            "value": "[parameters('toolGatewayImage')]"
+          },
+          {
+            "name": "PUBLIC_ORIGIN",
+            "value": "[format('{0}://{1}.{2}.cloudapp.azure.com/', if(variables('tlsEnabled'), 'https', 'http'), variables('publicIpDnsLabel'), parameters('location'))]"
+          },
+          {
+            "name": "GATEWAY_SECRET",
+            "secureValue": "[parameters('gatewaySecret')]"
+          },
           {
             "name": "REGION",
             "value": "[parameters('location')]"
@@ -672,5 +768,55 @@
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-workload', variables('userAssignedIdentityName')))]"
       ]
     }
-  ]
+  ],
+  "outputs": {
+    "aksName": {
+      "type": "string",
+      "value": "[variables('aksName')]"
+    },
+    "acrName": {
+      "type": "string",
+      "value": "[variables('acrName')]"
+    },
+    "cosmosDbAccountName": {
+      "type": "string",
+      "value": "[variables('cosmosDbAccountName')]"
+    },
+    "userAssignedIdentityClientId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), '2023-01-31').clientId]"
+    },
+    "workloadIdentityClientId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-workload', variables('userAssignedIdentityName'))), '2023-01-31').clientId]"
+    },
+    "appInsightsConnectionString": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName')), '2020-02-02').ConnectionString]"
+    },
+    "resourceGroupName": {
+      "type": "string",
+      "value": "[resourceGroup().name]"
+    },
+    "resourceLabel": {
+      "type": "string",
+      "value": "[parameters('resourceLabel')]"
+    },
+    "tenantId": {
+      "type": "string",
+      "value": "[tenant().tenantId]"
+    },
+    "location": {
+      "type": "string",
+      "value": "[parameters('location')]"
+    },
+    "publicIpFqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName')), '2022-05-01').dnsSettings.fqdn]"
+    },
+    "publicOrigin": {
+      "type": "string",
+      "value": "[format('{0}://{1}/', if(variables('tlsEnabled'), 'https', 'http'), reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName')), '2022-05-01').dnsSettings.fqdn)]"
+    }
+  }
 }
