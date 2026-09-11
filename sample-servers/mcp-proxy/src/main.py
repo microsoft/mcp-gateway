@@ -60,6 +60,4 @@ else:
     app = create_proxy(config, name="MCP Proxy Server")
 
 if __name__ == "__main__":
-    app.settings.host = "127.0.0.1"
-    app.settings.port = 8000
-    app.run(transport="streamable-http")
+    app.run(transport="http", host="127.0.0.1", port=8000)

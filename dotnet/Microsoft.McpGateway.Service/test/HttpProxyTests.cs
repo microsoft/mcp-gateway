@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Net;
 using System.Security.Claims;
 using System.Text;
 using FluentAssertions;
@@ -264,6 +265,88 @@ namespace Microsoft.McpGateway.Service.Tests
             context.Request.ContentLength = 0;
 
             return context;
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public void CreateRequest_PreservesModernHeadersAndIsolatesIdentity(bool firstParty)
+        {
+            using var services = new ServiceCollection().AddSingleton<IConfiguration>(
+                new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["GatewaySettings:Secret"] = "test-secret"
+                }).Build()).BuildServiceProvider();
+            var context = new DefaultHttpContext { RequestServices = services };
+            context.Request.Method = "POST";
+            context.Request.Scheme = "http";
+            context.Request.Host = new HostString("gateway");
+            context.User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim(ClaimTypes.NameIdentifier, "real-user"), new Claim(ClaimTypes.Role, "mcp.reader")], "Test"));
+            context.Request.Headers["Authorization"] = "Bearer not-forwarded";
+            context.Request.Headers["Cookie"] = "session=not-forwarded";
+            context.Request.Headers["Proxy-Authorization"] = "Basic not-forwarded";
+            context.Request.Headers[ForwardedIdentityHeaders.UserId] = "spoofed";
+            context.Request.Headers[ForwardedIdentityHeaders.GatewaySecret] = "spoofed";
+            context.Request.Headers["Mcp-Session-Id"] = "ignored";
+            context.Request.Headers["Last-Event-ID"] = "ignored";
+            var modernHeaders = new Dictionary<string, string>
+            {
+                ["MCP-Protocol-Version"] = "2026-07-28",
+                ["Mcp-Method"] = "tools/call",
+                ["Mcp-Name"] = "example",
+                ["Mcp-Param-Region"] = "=?base64?IHdlc3R1czIg?="
+            };
+            foreach (var header in modernHeaders)
+                context.Request.Headers[header.Key] = header.Value;
+
+            using var request = HttpProxy.CreateProxiedHttpRequest(context, forwardGatewaySecret: firstParty);
+
+            foreach (var header in modernHeaders)
+                Assert.AreEqual(header.Value, request.Headers.GetValues(header.Key).Single());
+            Assert.IsFalse(request.Headers.Contains("Authorization"));
+            Assert.IsFalse(request.Headers.Contains("Cookie"));
+            Assert.IsFalse(request.Headers.Contains("Proxy-Authorization"));
+            Assert.IsFalse(request.Headers.Contains("Mcp-Session-Id"));
+            Assert.IsFalse(request.Headers.Contains("Last-Event-ID"));
+            Assert.AreEqual("real-user", request.Headers.GetValues(ForwardedIdentityHeaders.UserId).Single());
+            Assert.AreEqual(firstParty, request.Headers.Contains(ForwardedIdentityHeaders.GatewaySecret));
+            if (firstParty)
+                Assert.AreEqual("test-secret", request.Headers.GetValues(ForwardedIdentityHeaders.GatewaySecret).Single());
+        }
+
+        [TestMethod]
+        public async Task CopyResponse_FlushesSseAndSuppressesLegacyHeaders()
+        {
+            const string body = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n";
+            using var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "text/event-stream")
+            };
+            response.Headers.TryAddWithoutValidation("Mcp-Session-Id", "ignored");
+            response.Headers.TryAddWithoutValidation("Last-Event-ID", "ignored");
+            var context = new DefaultHttpContext();
+            using var output = new FlushTrackingStream();
+            context.Response.Body = output;
+
+            await HttpProxy.CopyProxiedHttpResponseAsync(context, response, CancellationToken.None);
+
+            Assert.AreEqual(body, Encoding.UTF8.GetString(output.ToArray()));
+            Assert.IsTrue(output.FlushCount > 0);
+            Assert.AreEqual("no", context.Response.Headers["X-Accel-Buffering"].ToString());
+            Assert.IsFalse(context.Response.Headers.ContainsKey("Mcp-Session-Id"));
+            Assert.IsFalse(context.Response.Headers.ContainsKey("Last-Event-ID"));
+        }
+
+        private sealed class FlushTrackingStream : MemoryStream
+        {
+            public int FlushCount { get; private set; }
+
+            public override Task FlushAsync(CancellationToken cancellationToken)
+            {
+                FlushCount++;
+                return base.FlushAsync(cancellationToken);
+            }
         }
     }
 }

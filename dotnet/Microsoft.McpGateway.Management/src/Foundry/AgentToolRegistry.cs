@@ -5,6 +5,8 @@ using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Contracts;
 using Microsoft.McpGateway.Management.Store;
@@ -41,6 +43,7 @@ namespace Microsoft.McpGateway.Management.Foundry
         private readonly SubAgentInvoker? _subAgentInvoker;
         private readonly BuiltinToolExecutor? _builtinExecutor;
         private readonly ILogger<AgentToolRegistry> _logger;
+        private readonly string _namespace;
 
         public AgentToolRegistry(
             IToolResourceStore toolStore,
@@ -50,7 +53,8 @@ namespace Microsoft.McpGateway.Management.Foundry
             IBuiltinToolAuthorizer builtinToolAuthorizer,
             ILogger<AgentToolRegistry> logger,
             SubAgentInvoker? subAgentInvoker = null,
-            BuiltinToolExecutor? builtinExecutor = null)
+            BuiltinToolExecutor? builtinExecutor = null,
+            IOptions<GatewayKubernetesOptions>? kubernetesOptions = null)
         {
             _toolStore = toolStore ?? throw new ArgumentNullException(nameof(toolStore));
             _agentStore = agentStore ?? throw new ArgumentNullException(nameof(agentStore));
@@ -60,6 +64,7 @@ namespace Microsoft.McpGateway.Management.Foundry
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _subAgentInvoker = subAgentInvoker;
             _builtinExecutor = builtinExecutor;
+            _namespace = kubernetesOptions?.Value.Namespace ?? "adapter";
         }
 
         /// <summary>
@@ -223,7 +228,7 @@ namespace Microsoft.McpGateway.Management.Foundry
             var def = current.ToolDefinition;
             // Same convention as HttpToolExecutor: the tool's pod is reachable
             // via cluster DNS in the "adapter" namespace.
-            var endpoint = $"http://{tool.Name}-service.adapter.svc.cluster.local:{def.Port}{def.Path}";
+            var endpoint = $"http://{tool.Name}-service.{_namespace}.svc.cluster.local:{def.Port}{def.Path}";
 
             _logger.LogInformation("Calling MCP tool {tool} at {endpoint} (args {len} bytes)", tool.Name, endpoint, argumentsJson?.Length ?? 0);
 

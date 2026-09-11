@@ -4,8 +4,12 @@
 using System.Text;
 using System.Text.Json;
 using Microsoft.McpGateway.Management.Authorization;
+using Microsoft.McpGateway.Management.Contracts;
+using Microsoft.McpGateway.Management.Deployment;
+using Microsoft.Extensions.Options;
 using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Tools.Contracts;
+using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -23,7 +27,8 @@ namespace Microsoft.McpGateway.Tools.Services
         IToolResourceStore toolResourceStore,
         IPermissionProvider permissionProvider,
         IHttpContextAccessor httpContextAccessor,
-        ILogger<HttpToolExecutor> logger) : IToolExecutor
+        ILogger<HttpToolExecutor> logger,
+        IOptions<GatewayKubernetesOptions>? kubernetesOptions = null) : IToolExecutor
     {
         private readonly IHttpClientFactory httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         private readonly ILogger<HttpToolExecutor> logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -83,6 +88,10 @@ namespace Microsoft.McpGateway.Tools.Services
                 }
 
                 // Refresh provider cache for subsequent list requests
+                var httpContext = this.httpContextAccessor.HttpContext;
+                if (httpContext != null && httpContext.Request.Headers[McpProtocol.VersionHeader].ToString() == McpProtocol.Version)
+                    McpToolHeaderValidator.Validate(toolDefinition.Tool.InputSchema, requestContext.Params?.Arguments, httpContext.Request.Headers);
+
                 _ = await this.toolDefinitionProvider.GetToolDefinitionAsync(toolName, cancellationToken).ConfigureAwait(false);
 
                 // Compose the execution endpoint URL using UriBuilder. Building the URI from
@@ -90,7 +99,7 @@ namespace Microsoft.McpGateway.Tools.Services
                 // prevents URI authority injection — e.g. a path beginning with "@" cannot be
                 // reinterpreted as user-info that overrides the cluster-internal host. The path
                 // is additionally validated at registration time in ToolManagementService.
-                var host = $"{toolName}-service.adapter.svc.cluster.local";
+                var host = $"{toolName}-service.{kubernetesOptions?.Value.Namespace ?? "adapter"}.svc.cluster.local";
                 var uriBuilder = new UriBuilder(
                     Uri.UriSchemeHttp,
                     host,
@@ -105,12 +114,12 @@ namespace Microsoft.McpGateway.Tools.Services
 
                 // Send request to inference server
                 using var client = this.httpClientFactory.CreateClient();
-                var jsonContent = new StringContent(
+                using var jsonContent = new StringContent(
                     JsonSerializer.Serialize(requestContext.Params?.Arguments),
                     Encoding.UTF8,
                     "application/json");
 
-                var response = await client.PostAsync(
+                using var response = await client.PostAsync(
                     executionEndpoint,
                     jsonContent,
                     cancellationToken).ConfigureAwait(false);
@@ -149,6 +158,14 @@ namespace Microsoft.McpGateway.Tools.Services
                         new TextContentBlock { Text = responseContent }
                     ]
                 };
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (McpException)
+            {
+                throw;
             }
             catch (HttpRequestException ex)
             {

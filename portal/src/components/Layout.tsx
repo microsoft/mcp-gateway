@@ -92,12 +92,14 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
     color: tokens.colorNeutralForeground1,
     letterSpacing: "0",
+    "@media (max-width: 640px)": { display: "none" },
   },
   brandDivider: {
     width: "1px",
     height: "22px",
     backgroundColor: tokens.colorNeutralStroke1,
     margin: "0 10px",
+    "@media (max-width: 640px)": { display: "none" },
   },
   brandProduct: {
     fontSize: tokens.fontSizeBase300,
@@ -108,11 +110,13 @@ const useStyles = makeStyles({
   body: {
     gridRow: "2 / 3",
     display: "grid",
-    gridTemplateColumns: `${RAIL_EXPANDED} 1fr`,
+    gridTemplateColumns: `${RAIL_EXPANDED} minmax(0, 1fr)`,
     minHeight: 0,
+    "@media (max-width: 640px)": { gridTemplateColumns: "minmax(0, 1fr)", gridTemplateRows: "auto 1fr" },
   },
   bodyCollapsed: {
-    gridTemplateColumns: `${RAIL_COLLAPSED} 1fr`,
+    gridTemplateColumns: `${RAIL_COLLAPSED} minmax(0, 1fr)`,
+    "@media (max-width: 640px)": { gridTemplateColumns: "minmax(0, 1fr)" },
   },
   rail: {
     backgroundColor: tokens.colorNeutralBackground1,
@@ -126,10 +130,18 @@ const useStyles = makeStyles({
     height: `calc(100vh - ${HEADER_HEIGHT})`,
     boxSizing: "border-box",
     overflowY: "auto",
+    "@media (max-width: 640px)": {
+      position: "static",
+      height: "auto",
+      flexDirection: "row",
+      padding: "4px 8px",
+      borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    },
   },
   railToggle: {
     alignSelf: "flex-end",
     marginBottom: "4px",
+    "@media (max-width: 640px)": { display: "none" },
   },
   navItem: {
     position: "relative",
@@ -187,6 +199,7 @@ const useStyles = makeStyles({
   },
   navLabelHidden: {
     display: "none",
+    "@media (max-width: 640px)": { display: "inline" },
   },
   navItemCollapsed: {
     justifyContent: "center",
@@ -199,6 +212,7 @@ const useStyles = makeStyles({
     width: "100%",
     boxSizing: "border-box",
     margin: "0 auto",
+    "@media (max-width: 640px)": { padding: "16px 12px" },
   },
   identity: {
     display: "flex",

@@ -4,14 +4,15 @@
 using System.Collections.Concurrent;
 using k8s;
 using k8s.Models;
+using Microsoft.Extensions.Options;
 using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Extensions;
 
 namespace Microsoft.McpGateway.Service.Routing
 {
-    public class AdapterKubernetesNodeInfoProvider : IServiceNodeInfoProvider
+    public class AdapterKubernetesNodeInfoProvider : IServiceNodeInfoProvider, IDisposable
     {
-        private const string AdapterNamespace = "adapter";
+        private readonly string adapterNamespace;
         private const string AdapterLabel = "adapter/type=mcp";
         private const string RunningField = "status.phase=Running";
         private const int AdapterListenerPort = 8000;
@@ -23,10 +24,11 @@ namespace Microsoft.McpGateway.Service.Routing
         private readonly TaskCompletionSource<bool> _initialFetchCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private bool _disposed = false;
 
-        public AdapterKubernetesNodeInfoProvider(IKubernetesClientFactory kubeClientFactory, ILogger<AdapterKubernetesNodeInfoProvider> logger)
+        public AdapterKubernetesNodeInfoProvider(IKubernetesClientFactory kubeClientFactory, ILogger<AdapterKubernetesNodeInfoProvider> logger, IOptions<GatewayKubernetesOptions>? options = null)
         {
             _kubeClientFactory = kubeClientFactory ?? throw new ArgumentNullException(nameof(kubeClientFactory));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            adapterNamespace = options?.Value.Namespace ?? "adapter";
 
             FetchPodAddressInfo();
         }
@@ -38,7 +40,7 @@ namespace Microsoft.McpGateway.Service.Routing
 
             var healthyPods = GetHealthyPods(adapterName).ToDictionary(
                 p => p,
-                p => $"http://{p}.{adapterName}-service.{AdapterNamespace}.svc.cluster.local:{AdapterListenerPort}");
+                p => $"http://{p}.{adapterName}-service.{adapterNamespace}.svc.cluster.local:{AdapterListenerPort}");
 
             return healthyPods;
         }
@@ -60,7 +62,7 @@ namespace Microsoft.McpGateway.Service.Routing
                     try
                     {
                         var pods = await kubeClient.CoreV1.ListNamespacedPodAsync(
-                            namespaceParameter: AdapterNamespace,
+                            namespaceParameter: adapterNamespace,
                             labelSelector: AdapterLabel,
                             fieldSelector: RunningField,
                             cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -68,6 +70,7 @@ namespace Microsoft.McpGateway.Service.Routing
                         // Initialize the healthy pod dictionary.
                         var readyPods = pods.Items
                             .Where(p =>
+                                IsPodReady(p) &&
                                 p.Metadata?.Name != null &&
                                 p.Metadata.Labels.TryGetValue("statefulset.kubernetes.io/pod-name", out var podName) &&
                                 p.Metadata.OwnerReferences?.Any(o => o.Kind == "StatefulSet") == true)
@@ -83,7 +86,8 @@ namespace Microsoft.McpGateway.Service.Routing
 
                         foreach (var kvp in _healthyPodsByStatefulSet)
                         {
-                            _healthyPodsByStatefulSet[kvp.Key] = kvp.Value;
+                            if (!readyPods.ContainsKey(kvp.Key))
+                                _healthyPodsByStatefulSet.TryRemove(kvp.Key, out _);
                             _logger.LogDebug("Healthy pods for {statefulSetName}: [{pods}]", kvp.Key.Sanitize(), string.Join(", ", kvp.Value).Sanitize());
                         }
 
@@ -96,7 +100,7 @@ namespace Microsoft.McpGateway.Service.Routing
 
                         var watcherEnd = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                         using var watcher = kubeClient.CoreV1.WatchListNamespacedPod(
-                            namespaceParameter: AdapterNamespace,
+                            namespaceParameter: adapterNamespace,
                             labelSelector: AdapterLabel,
                             fieldSelector: RunningField,
                             resourceVersion: pods.Metadata?.ResourceVersion,
@@ -150,7 +154,7 @@ namespace Microsoft.McpGateway.Service.Routing
                                 watcherEnd.TrySetResult(true);
                             });
 
-                        await watcherEnd.Task.ConfigureAwait(false);
+                        await watcherEnd.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {

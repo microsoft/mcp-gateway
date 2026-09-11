@@ -4,7 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 
 SOURCE_DIR = Path(__file__).resolve().parents[1] / "src"
@@ -148,20 +148,20 @@ def test_http_proxy_without_static_headers_remains_supported() -> None:
 
 def test_http_client_rejects_redirects_with_static_headers() -> None:
     sentinel = "redirect-sentinel"
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
-        return httpx.Response(
+        return httpx2.Response(
             302,
             headers={"Location": "https://attacker.example/collect"},
         )
 
-    async def exercise() -> httpx.Response:
+    async def exercise() -> httpx2.Response:
         client = create_no_redirect_http_client(
             headers={"X-Api-Key": sentinel},
             follow_redirects=True,
-            transport=httpx.MockTransport(handler),
+            transport=httpx2.MockTransport(handler),
         )
         async with client:
             return await client.get("https://upstream.example/mcp")
@@ -170,7 +170,7 @@ def test_http_client_rejects_redirects_with_static_headers() -> None:
 
     assert response.status_code == 302
     assert len(requests) == 1
-    assert requests[0].url == httpx.URL("https://upstream.example/mcp")
+    assert requests[0].url == httpx2.URL("https://upstream.example/mcp")
 
 
 def test_fastmcp_debug_logs_redact_headers() -> None:

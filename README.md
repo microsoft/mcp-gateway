@@ -1,6 +1,8 @@
 # MCP Gateway
 
-**MCP Gateway** is a reverse proxy and management layer for [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) servers, enabling scalable, session-aware routing, authorization and lifecycle management of MCP servers in Kubernetes environments.
+**MCP Gateway** is a reverse proxy and management layer for [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) servers, enabling scalable, stateless request routing, authorization and lifecycle management of MCP servers in Kubernetes environments.
+
+> **Breaking change:** this version requires MCP `2026-07-28` clients and adapters. It does not provide legacy initialization, transport sessions, or protocol downgrade. See [the migration guide](docs/mcp-2026-07-28.md) for client requirements, request examples, deployment settings, and rollback considerations.
 
 ## Table of Contents
 
@@ -15,7 +17,7 @@
 
 This project provides:
 
-- A data gateway for routing traffic to MCP servers with session affinity.
+- A data gateway for independently routing each MCP request to a ready server instance.
 - A control plane for managing the MCP server lifecycle (deploy, update, delete).
 - Enterprise-ready integration points including telemetry, access control and observability.
 
@@ -24,8 +26,8 @@ This project provides:
 - **MCP Server**: A server implementing the Model Context Protocol, which typically a streamable HTTP endpoint.
 - **Adapters**: Logical resources representing MCP servers in the gateway, managed under the `/adapters` scope. Designed to coexist with other resource types (e.g., `/agents`) in a unified AI development platform.
 - **Tools**: Registered resources with MCP tool definitions that can be dynamically routed via the tool gateway router. Each tool includes metadata about its execution endpoint and input schema.
-- **Tool Gateway Router**: An MCP server that acts as an intelligent router, directing tool execution requests to the appropriate registered tool servers based on tool definitions. Multiple router instances may run behind the gateway for session affinity.
-- **Session-Aware Stateful Routing**: Ensures that all requests with a given `session_id` are consistently routed to the same MCP server instance.
+- **Tool Gateway Router**: An MCP server that directs tool execution requests to registered tool servers based on tool definitions. Multiple router instances can handle requests without transport-session affinity.
+- **Stateless MCP Routing**: Each request carries its protocol metadata and is independently authorized. Legacy session headers and the gateway's `session_id` query alias do not determine routing.
 - **Agents & Sessions (Preview)**: Optional, opt-in resources for running LLM-driven agents on top of registered MCP tools. *Agents* are metadata (system prompt + model + allowed tool list); *Sessions* are individual runs that stream events over Server-Sent Events. Disabled unless `FoundrySettings:Endpoint` is configured.
 
 ## Architecture
@@ -103,8 +105,8 @@ flowchart LR
     AdapterMgmt & ToolMgmt --> DeploymentMgmt
     AdapterMgmt & ToolMgmt --> MetadataMgmt
     
-    Routing -.->|"Session Affinity"| MCPServers
-    ToolRouting -.->|"Session Affinity"| ToolRouters
+    Routing -.->|"Per-Request Routing"| MCPServers
+    ToolRouting -.->|"Per-Request Routing"| ToolRouters
     ToolRouters ==>|"Dynamic Routing"| ToolServers
     
     DeploymentMgmt -->|"Deploy & Monitor"| Cluster
@@ -152,7 +154,7 @@ Available only when `FoundrySettings:Endpoint` is configured. See [Agents and Se
 
 #### Direct MCP Server Access
 
-- `POST /adapters/{name}/mcp` — Establish a streamable HTTP connection.
+- `POST /adapters/{name}/mcp` — Send an independent MCP request; receive JSON or request-scoped SSE.
 
 #### Dynamic Tool Routing via Tool Gateway Router
 
@@ -170,7 +172,7 @@ For step-by-step guidance on configuring Azure Entra ID (creating `mcp.admin` an
 ### Additional Capabilities
 
 - Support for **Proxying Local & Remote MCP Servers**. See [examples and usage](sample-servers/mcp-proxy/README.md).
-- Stateless reverse proxy with a distributed session store (production mode).
+- Stateless reverse proxy without MCP transport-session storage. Resource metadata remains in Redis (local Kubernetes) or Cosmos DB (cloud).
 - Kubernetes-native deployment using StatefulSets and headless services.
 - **Management portal** (React SPA) served by the gateway itself at
   [`/portal/`](portal/README.md) — list / create / edit / delete adapters and
@@ -199,7 +201,7 @@ The MCP Gateway now supports **tool registration** with dynamic routing capabili
    - Accessed via `POST /mcp` endpoint (without adapter name)
 
 3. **Dynamic Routing**: When clients send MCP requests to `/mcp`:
-   - The gateway routes requests to available tool gateway router instances with session affinity
+  - The gateway routes each request to an available tool gateway router instance
    - The router analyzes the tool call in the request
    - Based on the tool definition, it forwards the execution to the correct registered tool server
    - Results are returned through the router back to the client
@@ -285,6 +287,8 @@ For multi-tenant or production use, replace these with a real per-session sandbo
 
 ## Getting Started - Local Deployment
 
+The numbered steps below use the default `adapter` namespace. To test changes without replacing an existing deployment, follow [the isolated local E2E steps](deployment/e2e/README.md#local-e2e). `Kubernetes__Namespace` configures resource deployment and backend DNS; its default remains `adapter`.
+
 ### 1. Prepare Local Development Environment
 - [Install .NET 8 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
 - [Install Docker Desktop](https://docs.docker.com/desktop/)
@@ -345,6 +349,8 @@ kubectl port-forward -n adapter svc/mcpgateway-service 8000:8000
    ```
 
 ### 8. Test the API - MCP Server Access 
+- Use a client that supports MCP `2026-07-28`. `server/discover` is optional; direct `tools/list` and `tools/call` do not require a handshake. Every request must include the protocol version and client capabilities in `params._meta`, plus `MCP-Protocol-Version` and `Mcp-Method` headers. `tools/call` also requires `Mcp-Name` and any schema-annotated `Mcp-Param-*` headers.
+- GET/DELETE on MCP endpoints return `405`; legacy initialization is rejected. Long-lived notification streams use `POST subscriptions/listen` with a `params.notifications` filter, when supported by the adapter.
 - After deploying the MCP server, use a client like [VS Code](https://code.visualstudio.com/) to test the connection. Refer to the guide: [Use MCP servers in VS Code](https://code.visualstudio.com/docs/copilot/chat/mcp-servers). 
   > **Note:** Ensure VSCode is up to date to access the latest MCP features.
 
@@ -494,6 +500,12 @@ To allow Azure CLI & VS Code to work as the client for token acquisition.
 
 ### 3. Deploy Service Resources
 
+For source-change validation, use the checked-out [deployment script](deployment/Deploy-McpGateway.ps1), not the portal button or published `latest` images. It supports `-SubscriptionId`, `-TenantId`, `-Stage Infrastructure|Kubernetes|All`, `-GatewayImage`, and `-ToolGatewayImage`. Build and push both changed first-party images to ACR between the Infrastructure and Kubernetes stages.
+
+Use `-NodeCount 1 -NodeVmSize Standard_D4as_v5 -AcrSku Basic -CosmosServerless` only for a new, isolated short-lived test account/cluster after regional capacity validation. Production defaults remain two `Standard_D4ds_v5` nodes. Cosmos serverless is not an in-place conversion of an existing account.
+
+Before sending bearer tokens, configure an HTTPS listener by supplying a secure ARM parameter file with `tlsCertificateData` (base64 PFX) and `tlsCertificatePassword` through `-SecureParametersFile`. Keep the file outside source control. The script uses the local Kubernetes manifest, exact image inputs, and a generated or existing gateway secret; it does not download a manifest from `main`. See [cloud E2E steps](deployment/e2e/README.md#cloud-e2e) for a complete validation sequence.
+
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fmicrosoft%2Fmcp-gateway%2Fmain%2Fdeployment%2Finfra%2Fazure-deployment.json)
 
 **Parameters**
@@ -543,7 +555,7 @@ az acr build -r "mgreg$resourceLabel" -f sample-servers/mcp-example/Dockerfile s
 
 - Send a POST request to create an adapter resource:
   ```http
-  POST http://<resourceLabel>.<location>.cloudapp.azure.com/adapters
+  POST https://<resourceLabel>.<location>.cloudapp.azure.com/adapters
   Authorization: Bearer <token>
   Content-Type: application/json
   ```
@@ -563,14 +575,14 @@ az acr build -r "mgreg$resourceLabel" -f sample-servers/mcp-example/Dockerfile s
   > **Note:** Ensure VSCode is up to date to access the latest MCP features.
 
   - To connect to the deployed `mcp-example` server, use:  
-     - `http://<resourceLabel>.<location>.cloudapp.azure.com/adapters/mcp-example/mcp` (Streamable HTTP)
+    - `https://<resourceLabel>.<location>.cloudapp.azure.com/adapters/mcp-example/mcp` (Streamable HTTP)
 
   Sample `.vscode/mcp.json` that connects to the `mcp-example` server
   ```json
   {
     "servers": {
       "mcp-example": {
-        "url": "http://<resourceLabel>.<location>.cloudapp.azure.com/adapters/mcp-example/mcp",
+        "url": "https://<resourceLabel>.<location>.cloudapp.azure.com/adapters/mcp-example/mcp",
       }
     }
   }
@@ -578,7 +590,7 @@ az acr build -r "mgreg$resourceLabel" -f sample-servers/mcp-example/Dockerfile s
   > **Note:** Authentication is still required to access the MCP server, VS Code will help handle the authentication process.
 
 - For other servers:  
-  - `http://<resourceLabel>.<location>.cloudapp.azure.com/adapters/{name}/mcp` (Streamable HTTP)  
+  - `https://<resourceLabel>.<location>.cloudapp.azure.com/adapters/{name}/mcp` (Streamable HTTP)
 
 ### 7. Test Tool Registration and Dynamic Routing
 
@@ -598,7 +610,7 @@ az account get-access-token --resource $clientId
 
 Send a request to register a tool with its definition:
 ```http
-POST http://<resourceLabel>.<location>.cloudapp.azure.com/tools
+POST https://<resourceLabel>.<location>.cloudapp.azure.com/tools
 Authorization: Bearer <token>
 Content-Type: application/json
 ```
@@ -639,7 +651,7 @@ Content-Type: application/json
 
 Check the tool deployment status:
 ```http
-GET http://<resourceLabel>.<location>.cloudapp.azure.com/tools/weather/status
+GET https://<resourceLabel>.<location>.cloudapp.azure.com/tools/weather/status
 Authorization: Bearer <token>
 ```
 
@@ -652,7 +664,7 @@ Sample `.vscode/mcp.json` that connects to the tool gateway router:
 {
   "servers": {
     "tool-gateway": {
-      "url": "http://<resourceLabel>.<location>.cloudapp.azure.com/mcp"
+      "url": "https://<resourceLabel>.<location>.cloudapp.azure.com/mcp"
     }
   }
 }

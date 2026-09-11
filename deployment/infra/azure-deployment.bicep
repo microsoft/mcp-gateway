@@ -10,12 +10,48 @@ param resourceLabel string = resourceGroup().name
 @description('The Azure region for resource deployment. Defaults to the resource group location.')
 param location string = resourceGroup().location
 
-@description('Enable private endpoints for Azure resources (ACR, Cosmos DB). When enabled, resources will only be accessible within the VNet.')
+@description('Enable a private endpoint and DNS link for Cosmos DB and disable its public access. Does not configure private ACR access.')
 param enablePrivateEndpoints bool = false
 
 @description('Enable Kubernetes deployment script. Set to false when using external PowerShell script for deployment.')
 param enableKubernetesDeploymentScript bool = true
 
+@minLength(1)
+@maxLength(63)
+@description('Kubernetes namespace used by workloads, gateway routing, and workload identity service accounts.')
+param kubernetesNamespace string = 'adapter'
+
+@minValue(1)
+@description('AKS node count. Use one only for an isolated short-lived test.')
+param nodeCount int = 2
+
+@description('AKS system-pool VM size; must meet current AKS system-node requirements.')
+param nodeVmSize string = 'Standard_D4ds_v5'
+
+@allowed(['Basic', 'Standard', 'Premium'])
+param acrSku string = 'Standard'
+
+@description('Use consumption-based Cosmos DB for a new test account. Not an in-place account conversion.')
+param cosmosServerless bool = false
+
+@secure()
+@description('Base64 PFX certificate for the public HTTPS listener. Supply for authenticated cloud access.')
+param tlsCertificateData string = ''
+
+@secure()
+param tlsCertificatePassword string = ''
+
+@description('Exact gateway image to deploy; set to the image built from the checkout being validated.')
+param gatewayImage string = 'ghcr.io/microsoft/mcp-gateway:latest'
+
+@description('Exact first-party tool gateway image to deploy.')
+param toolGatewayImage string = 'ghcr.io/microsoft/tool-gateway:latest'
+
+@secure()
+@description('Optional first-party identity-forwarding secret; never supplied to adapter pods. The embedded deployment reuses the stored secret, or generates one on first deployment when omitted. An explicit value must match any existing secret.')
+param gatewaySecret string = ''
+
+var tlsEnabled = !empty(tlsCertificateData)
 var resourceLabelLower = toLower(resourceLabel)
 
 var aksNameBase = 'mg-aks-${resourceLabelLower}'
@@ -108,7 +144,7 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-01-01-preview' = {
   name: acrName
   location: location
   sku: {
-    name: 'Standard'
+    name: acrSku
   }
   properties: {
     policies: {
@@ -136,8 +172,8 @@ resource aks 'Microsoft.ContainerService/managedClusters@2023-04-01' = {
     agentPoolProfiles: [
       {
         name: 'nodepool1'
-        count: 2
-        vmSize: 'Standard_D4ds_v5'
+        count: nodeCount
+        vmSize: nodeVmSize
         osType: 'Linux'
         mode: 'System'
         osSKU: 'Ubuntu'
@@ -151,6 +187,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2023-04-01' = {
     }
     networkProfile: {
       networkPlugin: 'azure'
+      networkPolicy: 'azure'
       loadBalancerSku: 'standard'
       serviceCidr: '192.168.0.0/16'
       dnsServiceIP: '192.168.0.10'
@@ -208,6 +245,19 @@ resource appGw 'Microsoft.Network/applicationGateways@2022-09-01' = {
       tier: 'Standard_v2'
       capacity: 1
     }
+    globalConfiguration: {
+      enableRequestBuffering: false
+      enableResponseBuffering: false
+    }
+    sslCertificates: tlsEnabled ? [
+      {
+        name: 'gateway-tls'
+        properties: {
+          data: tlsCertificateData
+          password: tlsCertificatePassword
+        }
+      }
+    ] : []
     gatewayIPConfigurations: [
       {
         name: 'appGwIpConfig'
@@ -232,7 +282,7 @@ resource appGw 'Microsoft.Network/applicationGateways@2022-09-01' = {
       {
         name: 'httpPort'
         properties: {
-          port: 80
+          port: tlsEnabled ? 443 : 80
         }
       }
     ]
@@ -255,7 +305,7 @@ resource appGw 'Microsoft.Network/applicationGateways@2022-09-01' = {
           port: 8000
           protocol: 'Http'
           pickHostNameFromBackendAddress: false
-          requestTimeout: 20
+          requestTimeout: 600
           probe: {
             id: resourceId('Microsoft.Network/applicationGateways/probes', appGwName, 'mcpgateway-probe')
           }
@@ -272,7 +322,10 @@ resource appGw 'Microsoft.Network/applicationGateways@2022-09-01' = {
           frontendPort: {
             id: resourceId('Microsoft.Network/applicationGateways/frontendPorts', appGwName, 'httpPort')
           }
-          protocol: 'Http'
+          protocol: tlsEnabled ? 'Https' : 'Http'
+          sslCertificate: tlsEnabled ? {
+            id: resourceId('Microsoft.Network/applicationGateways/sslCertificates', appGwName, 'gateway-tls')
+          } : null
         }
       }
     ]
@@ -366,7 +419,7 @@ resource federatedCred 'Microsoft.ManagedIdentity/userAssignedIdentities/federat
       'api://AzureADTokenExchange'
     ]
     issuer: aks.properties.oidcIssuerProfile.issuerURL
-    subject: 'system:serviceaccount:adapter:mcpgateway-sa'
+    subject: 'system:serviceaccount:${kubernetesNamespace}:mcpgateway-sa'
   }
 }
 
@@ -379,7 +432,7 @@ resource federatedCredWorkload 'Microsoft.ManagedIdentity/userAssignedIdentities
       'api://AzureADTokenExchange'
     ]
     issuer: aks.properties.oidcIssuerProfile.issuerURL
-    subject: 'system:serviceaccount:adapter:workload-sa'
+    subject: 'system:serviceaccount:${kubernetesNamespace}:workload-sa'
   }
 }
 
@@ -396,7 +449,8 @@ resource cosmosDb 'Microsoft.DocumentDB/databaseAccounts@2023-04-15' = {
         failoverPriority: 0
       }
     ]
-    capabilities: []
+    capabilities: cosmosServerless ? [{ name: 'EnableServerless' }] : []
+    disableLocalAuth: true
     consistencyPolicy: {
       defaultConsistencyLevel: 'Session'
     }
@@ -552,6 +606,37 @@ resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01'
     timeout: 'PT30M'
     retentionInterval: 'P1D'
     scriptContent: '''
+      set -euo pipefail
+      if [[ ! "$KUBERNETES_NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+        echo 'Invalid Kubernetes namespace.' >&2
+        exit 1
+      fi
+
+      secret_result=$(az aks command invoke --resource-group "$ResourceGroupName" --name "$AKS_NAME" --command "kubectl -n $KUBERNETES_NAMESPACE get secret gateway-secret -o json --ignore-not-found" --output json)
+      if [[ $(printf '%s' "$secret_result" | jq -r '.exitCode') != 0 ]]; then
+        echo 'Could not safely inspect the existing gateway secret.' >&2
+        exit 1
+      fi
+      existing_secret=$(printf '%s' "$secret_result" | jq -r '.logs // ""')
+      if [[ -n "${existing_secret//[[:space:]]/}" ]]; then
+        GATEWAY_SECRET_BASE64=$(printf '%s' "$existing_secret" | jq -er '.data.gatewaySecret | select(type == "string" and length > 0)')
+        if [[ -n "$GATEWAY_SECRET" && $(printf '%s' "$GATEWAY_SECRET" | base64 --wrap=0) != "$GATEWAY_SECRET_BASE64" ]]; then
+          echo 'The supplied gateway secret does not match the existing secret. Rotate it separately before redeploying.' >&2
+          exit 1
+        fi
+      else
+        if [[ -z "$GATEWAY_SECRET" ]]; then
+          GATEWAY_SECRET=$(openssl rand -base64 32)
+        fi
+        GATEWAY_SECRET_BASE64=$(printf '%s' "$GATEWAY_SECRET" | base64 --wrap=0)
+      fi
+      if [[ $(printf '%s' "$GATEWAY_SECRET_BASE64" | base64 --decode | tr -d '[:space:]' | wc -c) -eq 0 ]]; then
+        echo 'The gateway secret must not be empty.' >&2
+        exit 1
+      fi
+
+      trap 'rm -f cloud-deployment-template.yml' EXIT
+      printf '%s' "$KUBERNETES_TEMPLATE" | base64 --decode > cloud-deployment-template.yml
       sed -i "s|\${AZURE_CLIENT_ID}|$AZURE_CLIENT_ID|g" cloud-deployment-template.yml
       sed -i "s|\${WORKLOAD_CLIENT_ID}|$WORKLOAD_CLIENT_ID|g" cloud-deployment-template.yml
       sed -i "s|\${TENANT_ID}|$TENANT_ID|g" cloud-deployment-template.yml
@@ -559,13 +644,51 @@ resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01'
       sed -i "s|\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g" cloud-deployment-template.yml
       sed -i "s|\${IDENTIFIER}|$IDENTIFIER|g" cloud-deployment-template.yml
       sed -i "s|\${REGION}|$REGION|g" cloud-deployment-template.yml
+      sed -i "s|\${GATEWAY_IMAGE}|$GATEWAY_IMAGE|g" cloud-deployment-template.yml
+      sed -i "s|\${TOOL_GATEWAY_IMAGE}|$TOOL_GATEWAY_IMAGE|g" cloud-deployment-template.yml
+      sed -i "s|\${KUBERNETES_NAMESPACE}|$KUBERNETES_NAMESPACE|g" cloud-deployment-template.yml
+      sed -i "s|\${PUBLIC_ORIGIN}|$PUBLIC_ORIGIN|g" cloud-deployment-template.yml
+      sed -i "s|\${GATEWAY_SECRET_BASE64}|$GATEWAY_SECRET_BASE64|g" cloud-deployment-template.yml
+      if grep -Eq '\$\{[A-Z_]+\}' cloud-deployment-template.yml; then
+        echo 'Unresolved placeholder in Kubernetes manifest.' >&2
+        exit 1
+      fi
 
-      az aks command invoke -g $ResourceGroupName -n mg-aks-"$ResourceGroupName" --command "kubectl apply -f cloud-deployment-template.yml" --file cloud-deployment-template.yml
+      apply_result=$(az aks command invoke --resource-group "$ResourceGroupName" --name "$AKS_NAME" --command 'kubectl apply -f cloud-deployment-template.yml' --file cloud-deployment-template.yml --output json)
+      if [[ $(printf '%s' "$apply_result" | jq -r '.exitCode') != 0 ]]; then
+        echo 'Kubernetes apply failed.' >&2
+        exit 1
+      fi
     '''
-    supportingScriptUris: [
-      'https://raw.githubusercontent.com/microsoft/mcp-gateway/refs/heads/main/deployment/k8s/cloud-deployment-template.yml'
-    ]
     environmentVariables: [
+      {
+        name: 'KUBERNETES_TEMPLATE'
+        value: base64(loadTextContent('../k8s/cloud-deployment-template.yml'))
+      }
+      {
+        name: 'KUBERNETES_NAMESPACE'
+        value: kubernetesNamespace
+      }
+      {
+        name: 'AKS_NAME'
+        value: aksName
+      }
+      {
+        name: 'GATEWAY_IMAGE'
+        value: gatewayImage
+      }
+      {
+        name: 'TOOL_GATEWAY_IMAGE'
+        value: toolGatewayImage
+      }
+      {
+        name: 'PUBLIC_ORIGIN'
+        value: '${tlsEnabled ? 'https' : 'http'}://${publicIpDnsLabel}.${location}.cloudapp.azure.com/'
+      }
+      {
+        name: 'GATEWAY_SECRET'
+        secureValue: gatewaySecret
+      }
       {
         name: 'REGION'
         value: location
@@ -612,6 +735,8 @@ output workloadIdentityClientId string = uaiWorkload.properties.clientId
 output appInsightsConnectionString string = appInsights.properties.ConnectionString
 output resourceGroupName string = resourceGroup().name
 output resourceLabel string = resourceLabel
+output kubernetesNamespace string = kubernetesNamespace
 output tenantId string = tenant().tenantId
 output location string = location
 output publicIpFqdn string = appGwPublicIp.properties.dnsSettings.fqdn
+output publicOrigin string = '${tlsEnabled ? 'https' : 'http'}://${appGwPublicIp.properties.dnsSettings.fqdn}/'

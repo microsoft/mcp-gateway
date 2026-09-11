@@ -1,0 +1,59 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: mcp-modern-e2e
+resources:
+  - ../../k8s
+  - proxy-network-policy.yaml
+images:
+  - name: localhost:5000/microsoft-mcpgateway-service
+    newTag: e2e
+  - name: localhost:5000/microsoft-mcpgateway-tools
+    newTag: e2e
+patches:
+  - target:
+      kind: Namespace
+      name: adapter
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: mcp-modern-e2e
+  - target:
+      kind: Deployment
+      name: mcpgateway
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: mcpgateway
+      spec:
+        replicas: 2
+        template:
+          spec:
+            containers:
+              - name: mcpgateway-container
+                env:
+                  - name: Kubernetes__Namespace
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: metadata.namespace
+                  - name: PublicOrigin
+                    value: http://localhost:18000
+  - target:
+      kind: StatefulSet
+      name: toolgateway
+    patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: toolgateway
+      spec:
+        replicas: 2
+        template:
+          spec:
+            containers:
+              - name: toolgateway-container
+                env:
+                  - name: Kubernetes__Namespace
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: metadata.namespace

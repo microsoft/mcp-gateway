@@ -11,6 +11,7 @@ import type {
 } from "./types";
 import { acquireToken } from "../auth/msal";
 import { devIdentityHeaders, loadDevIdentity } from "../auth/devIdentity";
+import { buildMcpRequest } from "./mcp";
 
 export class ApiError extends Error {
   status: number;
@@ -127,25 +128,24 @@ export class GatewayApi {
    * Issues a raw HTTP request against an adapter's MCP endpoint
    * (`POST /adapters/{name}/mcp`) or the tool router endpoint (`POST /mcp`)
    * when `name` is omitted. Returns the response so the caller can inspect
-   * both the body and the headers (which carry `mcp-session-id`).
+  * both the body and the headers.
    */
   async sendMcpRequest(
     name: string | undefined,
     body: unknown,
-    options?: { sessionId?: string; signal?: AbortSignal; accept?: string },
+    options?: { inputSchema?: unknown; signal?: AbortSignal; accept?: string },
   ): Promise<Response> {
     const path = name ? `/adapters/${encodeURIComponent(name)}/mcp` : "/mcp";
     const headers = await this.buildHeaders({
       accept: options?.accept ?? "application/json, text/event-stream",
       contentType: "application/json",
     });
-    if (options?.sessionId) {
-      headers.set("mcp-session-id", options.sessionId);
-    }
+    const request = buildMcpRequest(body, options?.inputSchema);
+    for (const [header, value] of Object.entries(request.headers)) headers.set(header, value);
     return fetch(path, {
       method: "POST",
       headers,
-      body: JSON.stringify(body),
+      body: JSON.stringify(request.body),
       signal: options?.signal,
       credentials: "same-origin",
     });
