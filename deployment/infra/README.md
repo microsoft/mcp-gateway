@@ -62,6 +62,9 @@ Run examples from the repository root. Use a lowercase alphanumeric `ResourceLab
 | `CosmosServerless` | No | Enable serverless on a new test account; not an in-place conversion |
 | `SecureParametersFile` | No | Path to an ARM parameter file with secure TLS certificate values; keep outside source control |
 | `KubernetesTemplatePath` | No | Defaults to the checked-out `deployment/k8s/cloud-deployment-template.yml` |
+| `KubernetesNamespace` | No | Infrastructure namespace, default `adapter`; the Kubernetes stage reuses the namespace in the infrastructure outputs |
+
+Set `-KubernetesNamespace mcp-gateway` during the infrastructure stage to use a non-default namespace. The namespace is shared by workload-identity subjects, Kubernetes resources, secret lookup, and gateway runtime settings. The Kubernetes stage reads the recorded namespace automatically and rejects conflicting overrides. Changing it requires an infrastructure update and does not move existing workloads or data.
 
 ### HTTPS and Image Deployment
 
@@ -73,7 +76,7 @@ Use the same subscription, tenant, resource label, client ID, and deployment nam
 2. Run `-Stage Infrastructure` to provision AKS, ACR, storage, and ingress.
 3. Build and publish the gateway, Tools, and adapter images to ACR. Record the exact image references.
 4. Ensure the deployment operator has Kubernetes data-plane permissions to create the namespace, Roles, RoleBindings, and secrets. Azure resource Owner alone does not grant these permissions on Azure-RBAC-enabled AKS; use an appropriately scoped AKS RBAC role.
-5. Run `-Stage Kubernetes` with `-GatewayImage` and `-ToolGatewayImage`. The script reads the local manifest and preserves an existing gateway secret or generates one when absent.
+5. Run `-Stage Kubernetes` with `-GatewayImage` and `-ToolGatewayImage`. The script reads the local manifest and preserves an existing gateway secret in the deployment namespace or generates one when absent. An empty stored secret or failed lookup stops deployment; repair the secret or access before retrying.
 6. Verify the HTTPS `publicOrigin`, pod readiness, image digests, and authenticated MCP requests. Both clients and adapters must support MCP `2026-07-28`.
 
 For a new short-lived test deployment only, `-NodeCount 1 -NodeVmSize Standard_D4as_v5 -AcrSku Basic -CosmosServerless` reduces the default footprint, subject to current regional capacity and AKS requirements. Application Gateway still has a base charge. See [end-to-end testing](../e2e/README.md) for validation commands.
@@ -84,10 +87,13 @@ Deploy infrastructure directly using Bicep, then use the PowerShell Kubernetes
 stage with the same deployment name and exact image references. The examples
 disable the embedded script so image publishing can happen before pod creation.
 
-The optional embedded-script path downloads its manifest from the published
-branch. It requires explicit compatible image references and a secure
-`gatewaySecret` value and is not suitable for validating unpublished checkout
-changes.
+The embedded-script path includes the checked-out manifest when Bicep is compiled.
+Supply compatible `gatewayImage` and `toolGatewayImage` references, and use
+`kubernetesNamespace` for a non-default namespace. The script preserves an existing
+gateway secret or generates and stores one on first deployment. The optional
+`gatewaySecret` secure parameter must match an existing secret when supplied;
+secret rotation is a separate, coordinated operation. Empty stored secrets and
+failed Kubernetes commands stop deployment without replacing credentials.
 
 ```bash
 # Create resource group
@@ -194,6 +200,7 @@ After successful deployment:
    ```
 
 2. **Verify Kubernetes Pods**:
+  Replace `adapter` with the configured namespace when using a non-default value.
    ```bash
    kubectl get pods -n adapter
    ```
@@ -294,7 +301,7 @@ If you previously deployed using the embedded Bicep deployment script:
 - **Authorization**: Azure RBAC for AKS, Cosmos DB RBAC for data access
 - **Network Isolation**: Optional private endpoints for enhanced security
 - **Identity**: Workload Identity for Azure data access. A separate gateway secret authenticates first-party identity forwarding; user-deployed adapters must never receive it.
-- **Secrets**: Managed identities eliminate need for storing credentials
+- **Secrets**: Azure services use managed identities. The first-party forwarding credential is stored in a Kubernetes Secret in the deployment namespace and is not supplied to adapter pods.
 
 ## Additional Resources
 

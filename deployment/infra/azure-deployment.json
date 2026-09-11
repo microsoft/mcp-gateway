@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "3808630452460102996"
+      "templateHash": "7864339571032235596"
     }
   },
   "parameters": {
@@ -43,6 +43,15 @@
       "defaultValue": true,
       "metadata": {
         "description": "Enable Kubernetes deployment script. Set to false when using external PowerShell script for deployment."
+      }
+    },
+    "kubernetesNamespace": {
+      "type": "string",
+      "defaultValue": "adapter",
+      "minLength": 1,
+      "maxLength": 63,
+      "metadata": {
+        "description": "Kubernetes namespace used by workloads, gateway routing, and workload identity service accounts."
       }
     },
     "nodeCount": {
@@ -105,11 +114,12 @@
       "type": "securestring",
       "defaultValue": "",
       "metadata": {
-        "description": "Shared first-party identity-forwarding secret; never supplied to adapter pods."
+        "description": "Optional first-party identity-forwarding secret; never supplied to adapter pods. The embedded deployment reuses the stored secret, or generates one on first deployment when omitted. An explicit value must match any existing secret."
       }
     }
   },
   "variables": {
+    "$fxv#0": "apiVersion: v1\r\nkind: Namespace\r\nmetadata:\r\n  name: \"${KUBERNETES_NAMESPACE}\"\r\n---\r\napiVersion: v1\r\nkind: Secret\r\nmetadata:\r\n  name: gateway-secret\r\n  namespace: \"${KUBERNETES_NAMESPACE}\"\r\ntype: Opaque\r\ndata:\r\n  gatewaySecret: \"${GATEWAY_SECRET_BASE64}\"\r\n---\r\napiVersion: apps/v1\r\nkind: Deployment\r\nmetadata:\r\n  name: mcpgateway\r\n  namespace: \"${KUBERNETES_NAMESPACE}\"\r\nspec:\r\n  replicas: 1\r\n  selector:\r\n    matchLabels:\r\n      app: mcpgateway\r\n  template:\r\n    metadata:\r\n      labels:\r\n        app: mcpgateway\r\n        azure.workload.identity/use: \"true\"\r\n    spec:\r\n      serviceAccountName: mcpgateway-sa\r\n      containers:\r\n        - name: mcpgateway-container\r\n          image: ${GATEWAY_IMAGE}\r\n          ports:\r\n            - containerPort: 8000\r\n          env:\r\n            - name: ASPNETCORE_ENVIRONMENT\r\n              value: \"Production\"\r\n            - name: GatewaySettings__Secret\r\n              valueFrom:\r\n                secretKeyRef:\r\n                  name: gateway-secret\r\n                  key: gatewaySecret\r\n          resources:\r\n            requests:\r\n              memory: \"256Mi\"\r\n              cpu: \"250m\"\r\n            limits:\r\n              memory: \"512Mi\"\r\n              cpu: \"500m\"\r\n          envFrom:\r\n            - configMapRef:\r\n                name: app-config\r\n---\r\napiVersion: v1\r\nkind: Service\r\nmetadata:\r\n  name: mcpgateway-service\r\n  namespace: \"${KUBERNETES_NAMESPACE}\"\r\n  annotations:\r\n    service.beta.kubernetes.io/azure-load-balancer-internal: \"true\"\r\nspec:\r\n  type: LoadBalancer\r\n  loadBalancerIP: 10.0.1.100\r\n  selector:\r\n    app: mcpgateway\r\n  ports:\r\n    - protocol: TCP\r\n      port: 8000\r\n      targetPort: 8000\r\n---\r\napiVersion: v1\r\nkind: ServiceAccount\r\nmetadata:\r\n  name: mcpgateway-sa\r\n  namespace: \"${KUBERNETES_NAMESPACE}\"\r\n  annotations:\r\n    azure.workload.identity/client-id: \"${AZURE_CLIENT_ID}\"\r\n---\r\napiVersion: v1\r\nkind: ServiceAccount\r\nmetadata:\r\n  name: workload-sa\r\n  namespace: \"${KUBERNETES_NAMESPACE}\"\r\n  annotations:\r\n    azure.workload.identity/client-id: \"${WORKLOAD_CLIENT_ID}\"\r\n---\r\napiVersion: rbac.authorization.k8s.io/v1\r\nkind: Role\r\nmetadata:\r\n  name: app-manager\r\n  namespace: \"${KUBERNETES_NAMESPACE}\"\r\nrules:\r\n  - apiGroups: [\"apps\"]\r\n    resources: [\"statefulsets\"]\r\n    verbs: [\"get\", \"list\", \"create\", \"update\", \"delete\", \"patch\", \"watch\"]\r\n  - apiGroups: [\"\"]\r\n    resources: [\"services\", \"pods\"]\r\n    verbs: [\"get\", \"list\", \"create\", \"update\", \"delete\", \"watch\"]\r\n  - apiGroups: [\"\"]\r\n    resources: [\"pods/log\"]\r\n    verbs: [\"get\", \"watch\"]\r\n---\r\napiVersion: rbac.authorization.k8s.io/v1\r\nkind: RoleBinding\r\nmetadata:\r\n  name: app-manager-binding\r\n  namespace: \"${KUBERNETES_NAMESPACE}\"\r\nsubjects:\r\n  - kind: ServiceAccount\r\n    name: mcpgateway-sa\r\n    namespace: \"${KUBERNETES_NAMESPACE}\"\r\nroleRef:\r\n  kind: Role\r\n  name: app-manager\r\n  apiGroup: rbac.authorization.k8s.io\r\n---\r\napiVersion: v1\r\nkind: ConfigMap\r\nmetadata:\r\n  name: app-config\r\n  namespace: \"${KUBERNETES_NAMESPACE}\"\r\ndata:\r\n  Kubernetes__Namespace: \"${KUBERNETES_NAMESPACE}\"\r\n  AzureAd__Instance: \"https://login.microsoftonline.com/\"\r\n  AzureAd__TenantId: \"${TENANT_ID}\"\r\n  AzureAd__ClientId: \"${CLIENT_ID}\"\r\n  AzureAd__Audience: \"${CLIENT_ID}\"\r\n\r\n  CosmosSettings__AccountEndpoint: \"https://mg-storage-${IDENTIFIER}.documents.azure.com:443/\"\r\n  CosmosSettings__DatabaseName: \"McpGatewayDb\"\r\n\r\n  ApplicationInsights__ConnectionString: \"${APPINSIGHTS_CONNECTION_STRING}\"\r\n\r\n  ContainerRegistrySettings__Endpoint: \"mgreg${IDENTIFIER}.azurecr.io\"\r\n\r\n  PublicOrigin: \"${PUBLIC_ORIGIN}\"\r\n---\r\napiVersion: apps/v1\r\nkind: StatefulSet\r\nmetadata:\r\n  name: toolgateway\r\n  namespace: \"${KUBERNETES_NAMESPACE}\"\r\nspec:\r\n  serviceName: toolgateway-service\r\n  replicas: 1\r\n  selector:\r\n    matchLabels:\r\n      app: toolgateway\r\n  template:\r\n    metadata:\r\n      labels:\r\n        app: toolgateway\r\n        azure.workload.identity/use: \"true\"\r\n        adapter/type: \"mcp\"\r\n    spec:\r\n      serviceAccountName: mcpgateway-sa\r\n      containers:\r\n        - name: toolgateway-container\r\n          image: ${TOOL_GATEWAY_IMAGE}\r\n          ports:\r\n            - containerPort: 8000\r\n          env:\r\n            - name: ASPNETCORE_ENVIRONMENT\r\n              value: \"Production\"\r\n            - name: GatewaySettings__Secret\r\n              valueFrom:\r\n                secretKeyRef:\r\n                  name: gateway-secret\r\n                  key: gatewaySecret\r\n          resources:\r\n            requests:\r\n              memory: \"256Mi\"\r\n              cpu: \"250m\"\r\n            limits:\r\n              memory: \"512Mi\"\r\n              cpu: \"500m\"\r\n          envFrom:\r\n            - configMapRef:\r\n                name: app-config\r\n---\r\napiVersion: v1\r\nkind: Service\r\nmetadata:\r\n  name: toolgateway-service\r\n  namespace: \"${KUBERNETES_NAMESPACE}\"\r\nspec:\r\n  clusterIP: \"None\"\r\n  selector:\r\n    app: toolgateway\r\n  ports:\r\n    - protocol: TCP\r\n      port: 8000\r\n      targetPort: 8000\r\n---\r\n# NetworkPolicy: Default deny all ingress in the deployment namespace\r\napiVersion: networking.k8s.io/v1\r\nkind: NetworkPolicy\r\nmetadata:\r\n  name: default-deny-ingress\r\n  namespace: \"${KUBERNETES_NAMESPACE}\"\r\nspec:\r\n  podSelector: {}\r\n  policyTypes:\r\n    - Ingress\r\n---\r\n# NetworkPolicy: Allow unrestricted ingress to mcpgateway on port 8000\r\napiVersion: networking.k8s.io/v1\r\nkind: NetworkPolicy\r\nmetadata:\r\n  name: allow-mcpgateway-ingress\r\n  namespace: \"${KUBERNETES_NAMESPACE}\"\r\nspec:\r\n  podSelector:\r\n    matchLabels:\r\n      app: mcpgateway\r\n  policyTypes:\r\n    - Ingress\r\n  ingress:\r\n    - ports:\r\n        - protocol: TCP\r\n          port: 8000\r\n---\r\n# NetworkPolicy: Only mcpgateway and toolgateway can reach adapter/tool pods\r\napiVersion: networking.k8s.io/v1\r\nkind: NetworkPolicy\r\nmetadata:\r\n  name: adapter-access\r\n  namespace: \"${KUBERNETES_NAMESPACE}\"\r\nspec:\r\n  podSelector:\r\n    matchExpressions:\r\n      - key: adapter/type\r\n        operator: In\r\n        values: [mcp, tool]\r\n  policyTypes:\r\n    - Ingress\r\n  ingress:\r\n    - from:\r\n        - podSelector:\r\n            matchLabels:\r\n              app: mcpgateway\r\n        - podSelector:\r\n            matchLabels:\r\n              app: toolgateway\r\n      ports:\r\n        - protocol: TCP\r\n          port: 8000\r\n",
     "tlsEnabled": "[not(empty(parameters('tlsCertificateData')))]",
     "resourceLabelLower": "[toLower(parameters('resourceLabel'))]",
     "aksNameBase": "[format('mg-aks-{0}', variables('resourceLabelLower'))]",
@@ -477,7 +487,7 @@
           "api://AzureADTokenExchange"
         ],
         "issuer": "[reference(resourceId('Microsoft.ContainerService/managedClusters', variables('aksName')), '2023-04-01').oidcIssuerProfile.issuerURL]",
-        "subject": "system:serviceaccount:adapter:mcpgateway-sa"
+        "subject": "[format('system:serviceaccount:{0}:mcpgateway-sa', parameters('kubernetesNamespace'))]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.ContainerService/managedClusters', variables('aksName'))]",
@@ -493,7 +503,7 @@
           "api://AzureADTokenExchange"
         ],
         "issuer": "[reference(resourceId('Microsoft.ContainerService/managedClusters', variables('aksName')), '2023-04-01').oidcIssuerProfile.issuerURL]",
-        "subject": "system:serviceaccount:adapter:workload-sa"
+        "subject": "[format('system:serviceaccount:{0}:workload-sa', parameters('kubernetesNamespace'))]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.ContainerService/managedClusters', variables('aksName'))]",
@@ -705,11 +715,20 @@
         "azCliVersion": "2.60.0",
         "timeout": "PT30M",
         "retentionInterval": "P1D",
-        "scriptContent": "      sed -i \"s|\\${AZURE_CLIENT_ID}|$AZURE_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${WORKLOAD_CLIENT_ID}|$WORKLOAD_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${TENANT_ID}|$TENANT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${CLIENT_ID}|$CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${IDENTIFIER}|$IDENTIFIER|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${REGION}|$REGION|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${GATEWAY_IMAGE}|$GATEWAY_IMAGE|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${TOOL_GATEWAY_IMAGE}|$TOOL_GATEWAY_IMAGE|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${PUBLIC_ORIGIN}|$PUBLIC_ORIGIN|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${GATEWAY_SECRET}|$GATEWAY_SECRET|g\" cloud-deployment-template.yml\r\n\r\n      az aks command invoke -g $ResourceGroupName -n mg-aks-\"$ResourceGroupName\" --command \"kubectl apply -f cloud-deployment-template.yml\" --file cloud-deployment-template.yml\r\n    ",
-        "supportingScriptUris": [
-          "https://raw.githubusercontent.com/microsoft/mcp-gateway/refs/heads/main/deployment/k8s/cloud-deployment-template.yml"
-        ],
+        "scriptContent": "      set -euo pipefail\r\n      if [[ ! \"$KUBERNETES_NAMESPACE\" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then\r\n        echo 'Invalid Kubernetes namespace.' >&2\r\n        exit 1\r\n      fi\r\n\r\n      secret_result=$(az aks command invoke --resource-group \"$ResourceGroupName\" --name \"$AKS_NAME\" --command \"kubectl -n $KUBERNETES_NAMESPACE get secret gateway-secret -o json --ignore-not-found\" --output json)\r\n      if [[ $(printf '%s' \"$secret_result\" | jq -r '.exitCode') != 0 ]]; then\r\n        echo 'Could not safely inspect the existing gateway secret.' >&2\r\n        exit 1\r\n      fi\r\n      existing_secret=$(printf '%s' \"$secret_result\" | jq -r '.logs // \"\"')\r\n      if [[ -n \"${existing_secret//[[:space:]]/}\" ]]; then\r\n        GATEWAY_SECRET_BASE64=$(printf '%s' \"$existing_secret\" | jq -er '.data.gatewaySecret | select(type == \"string\" and length > 0)')\r\n        if [[ -n \"$GATEWAY_SECRET\" && $(printf '%s' \"$GATEWAY_SECRET\" | base64 --wrap=0) != \"$GATEWAY_SECRET_BASE64\" ]]; then\r\n          echo 'The supplied gateway secret does not match the existing secret. Rotate it separately before redeploying.' >&2\r\n          exit 1\r\n        fi\r\n      else\r\n        if [[ -z \"$GATEWAY_SECRET\" ]]; then\r\n          GATEWAY_SECRET=$(openssl rand -base64 32)\r\n        fi\r\n        GATEWAY_SECRET_BASE64=$(printf '%s' \"$GATEWAY_SECRET\" | base64 --wrap=0)\r\n      fi\r\n      if [[ $(printf '%s' \"$GATEWAY_SECRET_BASE64\" | base64 --decode | tr -d '[:space:]' | wc -c) -eq 0 ]]; then\r\n        echo 'The gateway secret must not be empty.' >&2\r\n        exit 1\r\n      fi\r\n\r\n      trap 'rm -f cloud-deployment-template.yml' EXIT\r\n      printf '%s' \"$KUBERNETES_TEMPLATE\" | base64 --decode > cloud-deployment-template.yml\r\n      sed -i \"s|\\${AZURE_CLIENT_ID}|$AZURE_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${WORKLOAD_CLIENT_ID}|$WORKLOAD_CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${TENANT_ID}|$TENANT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${CLIENT_ID}|$CLIENT_ID|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${APPINSIGHTS_CONNECTION_STRING}|$APPINSIGHTS_CONNECTION_STRING|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${IDENTIFIER}|$IDENTIFIER|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${REGION}|$REGION|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${GATEWAY_IMAGE}|$GATEWAY_IMAGE|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${TOOL_GATEWAY_IMAGE}|$TOOL_GATEWAY_IMAGE|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${KUBERNETES_NAMESPACE}|$KUBERNETES_NAMESPACE|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${PUBLIC_ORIGIN}|$PUBLIC_ORIGIN|g\" cloud-deployment-template.yml\r\n      sed -i \"s|\\${GATEWAY_SECRET_BASE64}|$GATEWAY_SECRET_BASE64|g\" cloud-deployment-template.yml\r\n      if grep -Eq '\\$\\{[A-Z_]+\\}' cloud-deployment-template.yml; then\r\n        echo 'Unresolved placeholder in Kubernetes manifest.' >&2\r\n        exit 1\r\n      fi\r\n\r\n      apply_result=$(az aks command invoke --resource-group \"$ResourceGroupName\" --name \"$AKS_NAME\" --command 'kubectl apply -f cloud-deployment-template.yml' --file cloud-deployment-template.yml --output json)\r\n      if [[ $(printf '%s' \"$apply_result\" | jq -r '.exitCode') != 0 ]]; then\r\n        echo 'Kubernetes apply failed.' >&2\r\n        exit 1\r\n      fi\r\n    ",
         "environmentVariables": [
+          {
+            "name": "KUBERNETES_TEMPLATE",
+            "value": "[base64(variables('$fxv#0'))]"
+          },
+          {
+            "name": "KUBERNETES_NAMESPACE",
+            "value": "[parameters('kubernetesNamespace')]"
+          },
+          {
+            "name": "AKS_NAME",
+            "value": "[variables('aksName')]"
+          },
           {
             "name": "GATEWAY_IMAGE",
             "value": "[parameters('gatewayImage')]"
@@ -801,6 +820,10 @@
     "resourceLabel": {
       "type": "string",
       "value": "[parameters('resourceLabel')]"
+    },
+    "kubernetesNamespace": {
+      "type": "string",
+      "value": "[parameters('kubernetesNamespace')]"
     },
     "tenantId": {
       "type": "string",

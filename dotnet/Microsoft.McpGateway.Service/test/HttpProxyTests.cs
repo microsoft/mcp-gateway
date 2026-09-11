@@ -284,6 +284,8 @@ namespace Microsoft.McpGateway.Service.Tests
             context.User = new ClaimsPrincipal(new ClaimsIdentity(
                 [new Claim(ClaimTypes.NameIdentifier, "real-user"), new Claim(ClaimTypes.Role, "mcp.reader")], "Test"));
             context.Request.Headers["Authorization"] = "Bearer not-forwarded";
+            context.Request.Headers["Cookie"] = "session=not-forwarded";
+            context.Request.Headers["Proxy-Authorization"] = "Basic not-forwarded";
             context.Request.Headers[ForwardedIdentityHeaders.UserId] = "spoofed";
             context.Request.Headers[ForwardedIdentityHeaders.GatewaySecret] = "spoofed";
             context.Request.Headers["Mcp-Session-Id"] = "ignored";
@@ -303,6 +305,8 @@ namespace Microsoft.McpGateway.Service.Tests
             foreach (var header in modernHeaders)
                 Assert.AreEqual(header.Value, request.Headers.GetValues(header.Key).Single());
             Assert.IsFalse(request.Headers.Contains("Authorization"));
+            Assert.IsFalse(request.Headers.Contains("Cookie"));
+            Assert.IsFalse(request.Headers.Contains("Proxy-Authorization"));
             Assert.IsFalse(request.Headers.Contains("Mcp-Session-Id"));
             Assert.IsFalse(request.Headers.Contains("Last-Event-ID"));
             Assert.AreEqual("real-user", request.Headers.GetValues(ForwardedIdentityHeaders.UserId).Single());

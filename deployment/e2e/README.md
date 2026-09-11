@@ -4,6 +4,16 @@ These tests exercise a running gateway, the Python examples, and registered HTTP
 
 Run the commands below from the repository root. Prerequisites are .NET 8 SDK or later, Node 22.18 or later, PowerShell 7.4 or later for the examples, Docker Desktop with Kubernetes, and kubectl. Install portal dependencies with `npm --prefix portal ci`.
 
+## Offline Deployment Checks
+
+The deployment regression checks require only PowerShell 7.4 or later. They mock all Azure calls and cover namespace consistency, secret creation and reuse, failure handling, temporary-file cleanup, and ARM template settings. They do not require Azure credentials or a cluster.
+
+```powershell
+pwsh -File deployment/e2e/test-deployment.ps1
+```
+
+Pass `-BashPath bash`, or the full path to Git Bash on Windows, to also syntax-check the embedded Bicep deployment script. Regenerate the ARM JSON with `az bicep build --file deployment/infra/azure-deployment.bicep` after changing Bicep or the cloud manifest. These offline checks do not replace a deployment test.
+
 ## Local E2E
 
 The [local overlay](local/kustomization.yaml) uses namespace `mcp-modern-e2e`, a shared Redis store, and two gateway and two Tools replicas. It does not replace a deployment in the default `adapter` namespace. Always specify the Kubernetes context.

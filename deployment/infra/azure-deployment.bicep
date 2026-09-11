@@ -16,6 +16,11 @@ param enablePrivateEndpoints bool = false
 @description('Enable Kubernetes deployment script. Set to false when using external PowerShell script for deployment.')
 param enableKubernetesDeploymentScript bool = true
 
+@minLength(1)
+@maxLength(63)
+@description('Kubernetes namespace used by workloads, gateway routing, and workload identity service accounts.')
+param kubernetesNamespace string = 'adapter'
+
 @minValue(1)
 @description('AKS node count. Use one only for an isolated short-lived test.')
 param nodeCount int = 2
@@ -43,7 +48,7 @@ param gatewayImage string = 'ghcr.io/microsoft/mcp-gateway:latest'
 param toolGatewayImage string = 'ghcr.io/microsoft/tool-gateway:latest'
 
 @secure()
-@description('Shared first-party identity-forwarding secret; never supplied to adapter pods.')
+@description('Optional first-party identity-forwarding secret; never supplied to adapter pods. The embedded deployment reuses the stored secret, or generates one on first deployment when omitted. An explicit value must match any existing secret.')
 param gatewaySecret string = ''
 
 var tlsEnabled = !empty(tlsCertificateData)
@@ -414,7 +419,7 @@ resource federatedCred 'Microsoft.ManagedIdentity/userAssignedIdentities/federat
       'api://AzureADTokenExchange'
     ]
     issuer: aks.properties.oidcIssuerProfile.issuerURL
-    subject: 'system:serviceaccount:adapter:mcpgateway-sa'
+    subject: 'system:serviceaccount:${kubernetesNamespace}:mcpgateway-sa'
   }
 }
 
@@ -427,7 +432,7 @@ resource federatedCredWorkload 'Microsoft.ManagedIdentity/userAssignedIdentities
       'api://AzureADTokenExchange'
     ]
     issuer: aks.properties.oidcIssuerProfile.issuerURL
-    subject: 'system:serviceaccount:adapter:workload-sa'
+    subject: 'system:serviceaccount:${kubernetesNamespace}:workload-sa'
   }
 }
 
@@ -601,6 +606,37 @@ resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01'
     timeout: 'PT30M'
     retentionInterval: 'P1D'
     scriptContent: '''
+      set -euo pipefail
+      if [[ ! "$KUBERNETES_NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+        echo 'Invalid Kubernetes namespace.' >&2
+        exit 1
+      fi
+
+      secret_result=$(az aks command invoke --resource-group "$ResourceGroupName" --name "$AKS_NAME" --command "kubectl -n $KUBERNETES_NAMESPACE get secret gateway-secret -o json --ignore-not-found" --output json)
+      if [[ $(printf '%s' "$secret_result" | jq -r '.exitCode') != 0 ]]; then
+        echo 'Could not safely inspect the existing gateway secret.' >&2
+        exit 1
+      fi
+      existing_secret=$(printf '%s' "$secret_result" | jq -r '.logs // ""')
+      if [[ -n "${existing_secret//[[:space:]]/}" ]]; then
+        GATEWAY_SECRET_BASE64=$(printf '%s' "$existing_secret" | jq -er '.data.gatewaySecret | select(type == "string" and length > 0)')
+        if [[ -n "$GATEWAY_SECRET" && $(printf '%s' "$GATEWAY_SECRET" | base64 --wrap=0) != "$GATEWAY_SECRET_BASE64" ]]; then
+          echo 'The supplied gateway secret does not match the existing secret. Rotate it separately before redeploying.' >&2
+          exit 1
+        fi
+      else
+        if [[ -z "$GATEWAY_SECRET" ]]; then
+          GATEWAY_SECRET=$(openssl rand -base64 32)
+        fi
+        GATEWAY_SECRET_BASE64=$(printf '%s' "$GATEWAY_SECRET" | base64 --wrap=0)
+      fi
+      if [[ $(printf '%s' "$GATEWAY_SECRET_BASE64" | base64 --decode | tr -d '[:space:]' | wc -c) -eq 0 ]]; then
+        echo 'The gateway secret must not be empty.' >&2
+        exit 1
+      fi
+
+      trap 'rm -f cloud-deployment-template.yml' EXIT
+      printf '%s' "$KUBERNETES_TEMPLATE" | base64 --decode > cloud-deployment-template.yml
       sed -i "s|\${AZURE_CLIENT_ID}|$AZURE_CLIENT_ID|g" cloud-deployment-template.yml
       sed -i "s|\${WORKLOAD_CLIENT_ID}|$WORKLOAD_CLIENT_ID|g" cloud-deployment-template.yml
       sed -i "s|\${TENANT_ID}|$TENANT_ID|g" cloud-deployment-template.yml
@@ -610,15 +646,33 @@ resource kubernetesDeployment 'Microsoft.Resources/deploymentScripts@2023-08-01'
       sed -i "s|\${REGION}|$REGION|g" cloud-deployment-template.yml
       sed -i "s|\${GATEWAY_IMAGE}|$GATEWAY_IMAGE|g" cloud-deployment-template.yml
       sed -i "s|\${TOOL_GATEWAY_IMAGE}|$TOOL_GATEWAY_IMAGE|g" cloud-deployment-template.yml
+      sed -i "s|\${KUBERNETES_NAMESPACE}|$KUBERNETES_NAMESPACE|g" cloud-deployment-template.yml
       sed -i "s|\${PUBLIC_ORIGIN}|$PUBLIC_ORIGIN|g" cloud-deployment-template.yml
-      sed -i "s|\${GATEWAY_SECRET}|$GATEWAY_SECRET|g" cloud-deployment-template.yml
+      sed -i "s|\${GATEWAY_SECRET_BASE64}|$GATEWAY_SECRET_BASE64|g" cloud-deployment-template.yml
+      if grep -Eq '\$\{[A-Z_]+\}' cloud-deployment-template.yml; then
+        echo 'Unresolved placeholder in Kubernetes manifest.' >&2
+        exit 1
+      fi
 
-      az aks command invoke -g $ResourceGroupName -n mg-aks-"$ResourceGroupName" --command "kubectl apply -f cloud-deployment-template.yml" --file cloud-deployment-template.yml
+      apply_result=$(az aks command invoke --resource-group "$ResourceGroupName" --name "$AKS_NAME" --command 'kubectl apply -f cloud-deployment-template.yml' --file cloud-deployment-template.yml --output json)
+      if [[ $(printf '%s' "$apply_result" | jq -r '.exitCode') != 0 ]]; then
+        echo 'Kubernetes apply failed.' >&2
+        exit 1
+      fi
     '''
-    supportingScriptUris: [
-      'https://raw.githubusercontent.com/microsoft/mcp-gateway/refs/heads/main/deployment/k8s/cloud-deployment-template.yml'
-    ]
     environmentVariables: [
+      {
+        name: 'KUBERNETES_TEMPLATE'
+        value: base64(loadTextContent('../k8s/cloud-deployment-template.yml'))
+      }
+      {
+        name: 'KUBERNETES_NAMESPACE'
+        value: kubernetesNamespace
+      }
+      {
+        name: 'AKS_NAME'
+        value: aksName
+      }
       {
         name: 'GATEWAY_IMAGE'
         value: gatewayImage
@@ -681,6 +735,7 @@ output workloadIdentityClientId string = uaiWorkload.properties.clientId
 output appInsightsConnectionString string = appInsights.properties.ConnectionString
 output resourceGroupName string = resourceGroup().name
 output resourceLabel string = resourceLabel
+output kubernetesNamespace string = kubernetesNamespace
 output tenantId string = tenant().tenantId
 output location string = location
 output publicIpFqdn string = appGwPublicIp.properties.dnsSettings.fqdn

@@ -1,7 +1,7 @@
 using System.Globalization;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.McpGateway.Management.Contracts;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 
@@ -9,89 +9,104 @@ namespace Microsoft.McpGateway.Tools.Services;
 
 public static class McpToolHeaderValidator
 {
-    private static readonly Regex HeaderToken = new("^[!#$%&'*+.^_`|~a-zA-Z0-9-]+$", RegexOptions.CultureInvariant);
-    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private static readonly Regex HeaderToken = new(@"\A[!#$%&'*+.^_`|~a-zA-Z0-9-]+\z", RegexOptions.CultureInvariant);
     private const decimal MaxSafeInteger = 9007199254740991;
 
     public static void Validate(JsonElement schema, IDictionary<string, JsonElement>? arguments, IHeaderDictionary headers)
     {
         var values = JsonSerializer.SerializeToElement(arguments ?? new Dictionary<string, JsonElement>());
-        ValidateProperties(schema, values, headers, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        ValidateSchema(schema, values, headers, new HashSet<string>(StringComparer.OrdinalIgnoreCase), true, false);
     }
 
-    private static void ValidateProperties(JsonElement schema, JsonElement values, IHeaderDictionary headers, HashSet<string> names)
+    private static void ValidateSchema(JsonElement schema, JsonElement values, IHeaderDictionary headers,
+        HashSet<string> names, bool reachable, bool isProperty)
     {
-        if (schema.ValueKind != JsonValueKind.Object ||
-            !schema.TryGetProperty("properties", out var properties) || properties.ValueKind != JsonValueKind.Object)
+        if (schema.ValueKind != JsonValueKind.Object)
             return;
 
-        foreach (var property in properties.EnumerateObject())
+        ValidateHeader(schema, values, headers, names, reachable && isProperty);
+        foreach (var child in schema.EnumerateObject())
         {
-            if (property.Value.ValueKind != JsonValueKind.Object)
-                continue;
-            JsonElement value = default;
-            if (values.ValueKind == JsonValueKind.Object)
-                values.TryGetProperty(property.Name, out value);
-            ValidateProperties(property.Value, value, headers, names);
-
-            if (!property.Value.TryGetProperty("x-mcp-header", out var annotation))
-                continue;
-            var name = annotation.ValueKind == JsonValueKind.String ? annotation.GetString() : null;
-            if (string.IsNullOrEmpty(name) || !HeaderToken.IsMatch(name) || !names.Add(name))
-                Reject("Invalid or duplicate x-mcp-header annotation.");
-
-            var headerName = $"Mcp-Param-{name}";
-            var supplied = headers[headerName];
-            if (value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            if (child.Name == "properties" && child.Value.ValueKind == JsonValueKind.Object)
             {
-                if (supplied.Count > 0)
-                    Reject($"{headerName} must be omitted when its argument is absent or null.");
-                continue;
+                foreach (var property in child.Value.EnumerateObject())
+                {
+                    JsonElement value = default;
+                    if (values.ValueKind == JsonValueKind.Object)
+                        values.TryGetProperty(property.Name, out value);
+                    ValidateSchema(property.Value, value, headers, names, reachable, true);
+                }
             }
-
-            if (supplied.Count != 1 || supplied[0] is not { } raw)
+            else if (child.Name is not ("default" or "examples" or "enum" or "const"))
             {
-                Reject($"A single {headerName} header is required.");
-                return;
+                if (child.Value.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in child.Value.EnumerateArray())
+                        ValidateSchema(item, default, headers, names, false, false);
+                }
+                else if (child.Value.ValueKind == JsonValueKind.Object)
+                {
+                    if (child.Name is "$defs" or "definitions" or "patternProperties" or "dependentSchemas")
+                    {
+                        foreach (var definition in child.Value.EnumerateObject())
+                            ValidateSchema(definition.Value, default, headers, names, false, false);
+                    }
+                    else
+                    {
+                        ValidateSchema(child.Value, default, headers, names, false, false);
+                    }
+                }
             }
-
-            var decoded = Decode(raw);
-            var matches = value.ValueKind switch
-            {
-                JsonValueKind.String => string.Equals(decoded, value.GetString(), StringComparison.Ordinal),
-                JsonValueKind.True => decoded == "true",
-                JsonValueKind.False => decoded == "false",
-                JsonValueKind.Number when IsIntegerSchema(property.Value) =>
-                    IsMatchingInteger(decoded, value.GetRawText()),
-                _ => false
-            };
-            if (!matches)
-                Reject($"{headerName} does not match its annotated argument.");
         }
     }
 
-    private static string Decode(string value)
+    private static void ValidateHeader(JsonElement schema, JsonElement value, IHeaderDictionary headers,
+        HashSet<string> names, bool reachableProperty)
     {
-        if (value != value.Trim() || value.Any(character => character != '\t' && (character < ' ' || character > '~')))
-            Reject("Mirrored headers must use ASCII or the Base64 sentinel encoding.");
+        if (!schema.TryGetProperty("x-mcp-header", out var annotation))
+            return;
+        var name = annotation.ValueKind == JsonValueKind.String ? annotation.GetString() : null;
+        var type = GetPrimitiveType(schema);
+        if (!reachableProperty || string.IsNullOrEmpty(name) || !HeaderToken.IsMatch(name) || !names.Add(name) ||
+            type is not ("string" or "integer" or "boolean"))
+            Reject("Invalid, unsupported, or duplicate x-mcp-header annotation.");
 
-        if (!value.StartsWith("=?base64?", StringComparison.Ordinal) || !value.EndsWith("?=", StringComparison.Ordinal))
-            return value;
+        var headerName = $"Mcp-Param-{name}";
+        var supplied = headers[headerName];
+        if (value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            if (supplied.Count > 0)
+                Reject($"{headerName} must be omitted when its argument is absent or null.");
+            return;
+        }
 
-        try
+        if (supplied.Count != 1 || supplied[0] is not { } raw)
         {
-            return StrictUtf8.GetString(Convert.FromBase64String(value[9..^2]));
+            Reject($"A single {headerName} header is required.");
+            return;
         }
-        catch (Exception exception) when (exception is FormatException or DecoderFallbackException)
+
+        var decoded = McpProtocol.DecodeHeader(raw);
+        var matches = (type, value.ValueKind) switch
         {
-            throw new McpProtocolException("Invalid Base64 mirrored header.", McpErrorCode.HeaderMismatch);
-        }
+            ("string", JsonValueKind.String) => string.Equals(decoded, value.GetString(), StringComparison.Ordinal),
+            ("boolean", JsonValueKind.True) => decoded == "true",
+            ("boolean", JsonValueKind.False) => decoded == "false",
+            ("integer", JsonValueKind.Number) => IsMatchingInteger(decoded, value.GetRawText()),
+            _ => false
+        };
+        if (!matches)
+            Reject($"{headerName} does not match its annotated argument.");
     }
 
-    private static bool IsIntegerSchema(JsonElement schema) =>
-        schema.TryGetProperty("type", out var type) &&
-        (type.ValueKind == JsonValueKind.String && type.GetString() == "integer" ||
-            type.ValueKind == JsonValueKind.Array && type.EnumerateArray().Any(item => item.ValueKind == JsonValueKind.String && item.GetString() == "integer"));
+    private static string? GetPrimitiveType(JsonElement schema)
+    {
+        if (!schema.TryGetProperty("type", out var type))
+            return null;
+        var types = type.ValueKind == JsonValueKind.Array ? type.EnumerateArray().ToArray() : [type];
+        var primitives = types.Where(item => item.ValueKind != JsonValueKind.String || item.GetString() != "null").ToArray();
+        return primitives.Length == 1 && primitives[0].ValueKind == JsonValueKind.String ? primitives[0].GetString() : null;
+    }
 
     private static bool IsMatchingInteger(string header, string body) =>
         decimal.TryParse(header, NumberStyles.Float, CultureInfo.InvariantCulture, out var headerValue) &&

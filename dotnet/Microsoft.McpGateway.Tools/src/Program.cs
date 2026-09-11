@@ -3,6 +3,7 @@
 
 using Azure.Identity;
 using Microsoft.Azure.Cosmos;
+using Microsoft.McpGateway.Management;
 using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Contracts;
@@ -158,5 +159,6 @@ if (app.Environment.IsDevelopment())
         await next().ConfigureAwait(false);
     });
 }
+app.UseMiddleware<McpProtocolMiddleware>();
 app.MapMcp();
 await app.RunAsync();

@@ -44,6 +44,8 @@ namespace Microsoft.McpGateway.Service
                     string.Equals(header.Key, HeaderNames.Host, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(header.Key, HeaderNames.Connection, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(header.Key, HeaderNames.TransferEncoding, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(header.Key, HeaderNames.Cookie, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(header.Key, HeaderNames.ProxyAuthorization, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(header.Key, "Forwarded", StringComparison.OrdinalIgnoreCase))
                     continue;
 

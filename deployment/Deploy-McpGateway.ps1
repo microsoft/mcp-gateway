@@ -61,6 +61,9 @@
 .PARAMETER KubernetesTemplatePath
     Local Kubernetes manifest template; defaults to the checked-out deployment template.
 
+.PARAMETER KubernetesNamespace
+    Kubernetes namespace for infrastructure deployment; defaults to adapter. The Kubernetes stage reuses the namespace recorded in the infrastructure outputs.
+
 .EXAMPLE
     .\Deploy-McpGateway.ps1 -ResourceGroupName "rg-mcpgateway-dev" -ResourceLabel "mcpdev" -ClientId "00000000-0000-0000-0000-000000000000" -Stage Infrastructure
 
@@ -108,6 +111,9 @@ param(
     [switch]$CosmosServerless,
     [string]$GatewayImage = 'ghcr.io/microsoft/mcp-gateway:latest',
     [string]$ToolGatewayImage = 'ghcr.io/microsoft/tool-gateway:latest',
+    [ValidateLength(1, 63)]
+    [ValidatePattern('\A[a-z0-9]([-a-z0-9]*[a-z0-9])?\z')]
+    [string]$KubernetesNamespace,
     [string]$SecureParametersFile,
     [string]$KubernetesTemplatePath = (Join-Path $PSScriptRoot 'k8s/cloud-deployment-template.yml')
 )
@@ -228,6 +234,9 @@ function Start-Deployment {
     $deploymentParams += "cosmosServerless=$($CosmosServerless.IsPresent.ToString().ToLowerInvariant())"
     $deploymentParams += "gatewayImage=$GatewayImage"
     $deploymentParams += "toolGatewayImage=$ToolGatewayImage"
+    if ($KubernetesNamespace) {
+        $deploymentParams += "kubernetesNamespace=$KubernetesNamespace"
+    }
     if ($SecureParametersFile) {
         if (-not (Test-Path -LiteralPath $SecureParametersFile)) { throw 'Secure parameter file not found.' }
         $deploymentParams += "@$SecureParametersFile"
@@ -308,16 +317,22 @@ function Deploy-KubernetesResources {
     $identifier = $Outputs.resourceLabel.value
     $tenantId = $Outputs.tenantId.value
     $region = $Outputs.location.value
+    $namespace = $Outputs.kubernetesNamespace.value
+    if ([string]::IsNullOrEmpty($namespace)) { $namespace = 'adapter' }
+    if ($namespace.Length -gt 63 -or $namespace -cnotmatch '\A[a-z0-9]([-a-z0-9]*[a-z0-9])?\z') {
+        throw 'The infrastructure output contains an invalid Kubernetes namespace.'
+    }
+    if ($KubernetesNamespace -and $KubernetesNamespace -ne $namespace) {
+        throw 'KubernetesNamespace must match the infrastructure deployment. Redeploy infrastructure before changing namespaces.'
+    }
 
-    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "mcpgateway-k8s-$([Guid]::NewGuid().ToString('N'))"
-    New-Item -ItemType Directory -Path $tempDir | Out-Null
     if (-not (Test-Path -LiteralPath $KubernetesTemplatePath)) { throw 'Local Kubernetes template not found.' }
     $templatePath = $KubernetesTemplatePath
 
     # Read and replace placeholders
     Write-ColorOutput "Processing template..." -Type Info
     $content = Get-Content $templatePath -Raw
-    $existing = az aks command invoke --resource-group $ResourceGroupName --name $aksName --command 'kubectl -n adapter get secret gateway-secret -o json --ignore-not-found' --output json | ConvertFrom-Json
+    $existing = az aks command invoke --resource-group $ResourceGroupName --name $aksName --command "kubectl -n $namespace get secret gateway-secret -o json --ignore-not-found" --output json | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0 -or $existing.exitCode -ne 0) { throw 'Could not safely inspect the existing gateway secret.' }
     if (-not [string]::IsNullOrWhiteSpace($existing.logs)) {
         $existingSecret = $existing.logs | ConvertFrom-Json
@@ -325,6 +340,9 @@ function Deploy-KubernetesResources {
     }
     else {
         $sharedSecret = [Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+    }
+    if ([string]::IsNullOrWhiteSpace($sharedSecret)) {
+        throw 'The existing gateway secret is empty. Repair it before deploying workloads.'
     }
     
     $replacements = @{
@@ -337,8 +355,9 @@ function Deploy-KubernetesResources {
         '${REGION}' = $region
         '${GATEWAY_IMAGE}' = $GatewayImage
         '${TOOL_GATEWAY_IMAGE}' = $ToolGatewayImage
+        '${KUBERNETES_NAMESPACE}' = $namespace
         '${PUBLIC_ORIGIN}' = $Outputs.publicOrigin.value
-        '${GATEWAY_SECRET}' = $sharedSecret
+        '${GATEWAY_SECRET_BASE64}' = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($sharedSecret))
     }
 
     foreach ($key in $replacements.Keys) {
@@ -346,12 +365,13 @@ function Deploy-KubernetesResources {
     }
     if ($content -match '\$\{[A-Z_]+\}') { throw 'Unresolved placeholder in Kubernetes manifest.' }
 
-    $processedTemplatePath = Join-Path $tempDir "cloud-deployment-processed.yml"
-    $content | Set-Content $processedTemplatePath -NoNewline
-
     # Apply Kubernetes manifest using AKS command invoke
     Write-ColorOutput "Applying Kubernetes manifest to AKS..." -Type Info
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "mcpgateway-k8s-$([Guid]::NewGuid().ToString('N'))"
     try {
+        New-Item -ItemType Directory -Path $tempDir | Out-Null
+        $processedTemplatePath = Join-Path $tempDir "cloud-deployment-processed.yml"
+        $content | Set-Content $processedTemplatePath -NoNewline
         $applyResult = az aks command invoke `
             --resource-group $ResourceGroupName `
             --name $aksName `
