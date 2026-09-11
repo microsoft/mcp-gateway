@@ -18,6 +18,7 @@ public class McpToolHeaderValidatorTests
     [DataRow(null)]
     [DataRow("wrong-region")]
     [DataRow("=?base64?invalid!?=")]
+    [DataRow("=?base64?=")]
     public void Validate_RejectsMissingOrMismatchedHeaders(string? header)
     {
         using var schema = JsonDocument.Parse(StringSchema);

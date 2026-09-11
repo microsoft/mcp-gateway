@@ -179,6 +179,8 @@ public class McpEndpointMiddlewareTests
     [DataRow("tools/call", "name", null, "example", 400)]
     [DataRow("tools/call", "name", "example", "=?base64?invalid?=", 400)]
     [DataRow("tools/call", "name", "example", "=?base64?/w==?=", 400)]
+    [DataRow("tools/call", "name", "example", "=?base64?=", 400)]
+    [DataRow("tools/call", "name", "", "=?base64??=", 200)]
     public async Task Invoke_ValidatesMirroredName(string method, string property, string? bodyName, string? headerName, int status)
     {
         using var services = new ServiceCollection().AddLogging().BuildServiceProvider();
