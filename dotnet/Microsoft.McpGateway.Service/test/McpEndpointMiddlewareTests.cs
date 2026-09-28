@@ -3,8 +3,10 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.McpGateway.Management;
 using Microsoft.McpGateway.Management.Contracts;
 
 namespace Microsoft.McpGateway.Service.Tests;
@@ -73,6 +75,51 @@ public class McpEndpointMiddlewareTests
         var invoked = false;
         await CreateMiddleware(_ => { invoked = true; return Task.CompletedTask; }).InvokeAsync(context);
         Assert.IsTrue(invoked);
+    }
+
+    [TestMethod]
+    public async Task OriginGate_DoesNotReadBodyBeforeAuthentication()
+    {
+        using var services = new ServiceCollection().AddLogging().BuildServiceProvider();
+        var context = CreateContext(services);
+        context.Request.Headers.Origin = "https://portal.example";
+        context.Request.Body = new UnreadableStream(new AssertFailedException("The body must not be read before authentication."));
+        var invoked = false;
+
+        await new McpEndpointMiddleware(_ => { invoked = true; return Task.CompletedTask; }, CreateConfiguration()).InvokeAsync(context);
+
+        Assert.IsTrue(invoked);
+    }
+
+    [TestMethod]
+    public async Task Invoke_RejectsDeclaredOversizedBodyWithoutReadingIt()
+    {
+        using var services = new ServiceCollection().AddLogging().BuildServiceProvider();
+        var context = CreateContext(services);
+        context.Request.Headers[McpProtocol.VersionHeader] = McpProtocol.Version;
+        context.Request.Body = new UnreadableStream(new AssertFailedException("An oversized body must not be read."));
+        context.Request.ContentLength = McpProtocolMiddleware.MaxRequestBodySize + 1;
+
+        await CreateMiddleware(_ => throw new AssertFailedException("Request must not reach a backend.")).InvokeAsync(context);
+
+        Assert.AreEqual(413, context.Response.StatusCode);
+    }
+
+    [TestMethod]
+    public async Task Invoke_LimitsUndeclaredBodySize()
+    {
+        using var services = new ServiceCollection().AddLogging().BuildServiceProvider();
+        var context = CreateContext(services);
+        context.Request.Headers[McpProtocol.VersionHeader] = McpProtocol.Version;
+        var bodySize = new BodySizeFeature();
+        context.Features.Set<IHttpMaxRequestBodySizeFeature>(bodySize);
+        context.Request.Body = new UnreadableStream(new BadHttpRequestException("Request body too large.", StatusCodes.Status413PayloadTooLarge));
+        context.Request.ContentLength = null;
+
+        await CreateMiddleware(_ => throw new AssertFailedException("Request must not reach a backend.")).InvokeAsync(context);
+
+        Assert.AreEqual(McpProtocolMiddleware.MaxRequestBodySize, bodySize.MaxRequestBodySize);
+        Assert.AreEqual(413, context.Response.StatusCode);
     }
 
     [DataTestMethod]
@@ -309,9 +356,37 @@ public class McpEndpointMiddlewareTests
         return context;
     }
 
-    private static McpEndpointMiddleware CreateMiddleware(RequestDelegate next) => new(next,
+    private static McpEndpointMiddleware CreateMiddleware(RequestDelegate next)
+    {
+        var protocol = new McpProtocolMiddleware(next);
+        return new(context => McpEndpointMiddleware.IsMcpEndpoint(context) ? protocol.InvokeAsync(context) : next(context), CreateConfiguration());
+    }
+
+    private static IConfiguration CreateConfiguration() =>
         new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["PublicOrigin"] = "https://portal.example/"
-        }).Build());
+        }).Build();
+
+    private sealed class BodySizeFeature : IHttpMaxRequestBodySizeFeature
+    {
+        public bool IsReadOnly => false;
+        public long? MaxRequestBodySize { get; set; } = 30_000_000;
+    }
+
+    private sealed class UnreadableStream(Exception exception) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override int Read(byte[] buffer, int offset, int count) => throw exception;
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => Task.FromException<int>(exception);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => ValueTask.FromException<int>(exception);
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
 }

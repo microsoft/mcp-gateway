@@ -47,7 +47,31 @@ namespace Microsoft.McpGateway.Service.Routing
 
         private string[] GetHealthyPods(string statefulSetName) => _healthyPodsByStatefulSet.TryGetValue(statefulSetName, out var pods) ? pods : [];
 
-        private static bool IsPodReady(V1Pod pod) => pod.Status?.Conditions?.Any(c => c.Type == "Ready" && c.Status == "True") == true;
+        private static bool IsPodReady(V1Pod pod) =>
+            pod.Metadata?.DeletionTimestamp is null && pod.Status?.Conditions?.Any(c => c.Type == "Ready" && c.Status == "True") == true;
+
+        internal static string[] ApplyPodEvent(string[] healthyPods, WatchEventType eventType, V1Pod pod)
+        {
+            var healthyPodsList = healthyPods.ToList();
+            var podName = pod.Metadata!.Name!;
+
+            switch (eventType)
+            {
+                case WatchEventType.Added:
+                case WatchEventType.Modified:
+                    if (IsPodReady(pod) && !healthyPodsList.Contains(podName))
+                        healthyPodsList.Add(podName);
+                    else if (!IsPodReady(pod))
+                        healthyPodsList.Remove(podName);
+                    break;
+
+                case WatchEventType.Deleted:
+                    healthyPodsList.Remove(podName);
+                    break;
+            }
+
+            return [.. healthyPodsList];
+        }
 
         private void FetchPodAddressInfo()
         {
@@ -117,29 +141,8 @@ namespace Microsoft.McpGateway.Service.Routing
 
                                 _healthyPodsByStatefulSet.AddOrUpdate(
                                     adapterName,
-                                    key => eventType == WatchEventType.Added && IsPodReady(pod) ? [pod.Metadata!.Name!] : [],
-                                    (key, existingHealthyPods) =>
-                                    {
-                                        var healthyPodsList = existingHealthyPods.ToList();
-                                        var podName = pod.Metadata!.Name!;
-
-                                        switch (eventType)
-                                        {
-                                            case WatchEventType.Added:
-                                            case WatchEventType.Modified:
-                                                if (IsPodReady(pod) && !healthyPodsList.Contains(podName))
-                                                    healthyPodsList.Add(podName);
-                                                else if (!IsPodReady(pod))
-                                                    healthyPodsList.Remove(podName);
-                                                break;
-
-                                            case WatchEventType.Deleted:
-                                                healthyPodsList.Remove(podName);
-                                                break;
-                                        }
-
-                                        return [.. healthyPodsList];
-                                    });
+                                    _ => ApplyPodEvent([], eventType, pod),
+                                    (_, existingHealthyPods) => ApplyPodEvent(existingHealthyPods, eventType, pod));
 
                                 _logger.LogInformation("Kubernetes watch event type {eventType}, pod name {name}, update completes", eventType, pod.Metadata?.Name);
                             },

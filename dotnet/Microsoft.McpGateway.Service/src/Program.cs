@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Identity.Web;
 using Microsoft.Extensions.Options;
+using Microsoft.McpGateway.Management;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Foundry;
@@ -225,6 +226,8 @@ app.UseStaticFiles();
 app.UseMiddleware<McpEndpointMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
+// Parse MCP bodies only for authorized requests.
+app.UseWhen(McpEndpointMiddleware.IsMcpEndpoint, mcp => mcp.UseMiddleware<McpProtocolMiddleware>());
 
 // Land users on the portal when they visit the gateway in a browser. The
 // redirect is attributed AllowAnonymous so the unauthenticated case still

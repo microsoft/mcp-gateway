@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.McpGateway.Management.Contracts;
 using Microsoft.Net.Http.Headers;
 using ModelContextProtocol;
@@ -8,6 +9,8 @@ namespace Microsoft.McpGateway.Management;
 
 public sealed class McpProtocolMiddleware(RequestDelegate next)
 {
+    public const long MaxRequestBodySize = 4 * 1024 * 1024;
+
     public async Task InvokeAsync(HttpContext context)
     {
         if (!HttpMethods.IsPost(context.Request.Method))
@@ -69,6 +72,16 @@ public sealed class McpProtocolMiddleware(RequestDelegate next)
             return;
         }
 
+        if (context.Request.ContentLength > MaxRequestBodySize)
+        {
+            await RejectAsync(context, -32600, $"The request body must not exceed {MaxRequestBodySize} bytes.",
+                statusCode: StatusCodes.Status413PayloadTooLarge).ConfigureAwait(false);
+            return;
+        }
+
+        if (context.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } bodySizeFeature)
+            bodySizeFeature.MaxRequestBodySize = MaxRequestBodySize;
+
         context.Request.EnableBuffering();
         var bodyPosition = context.Request.Body.Position;
         JsonDocument document;
@@ -79,6 +92,11 @@ public sealed class McpProtocolMiddleware(RequestDelegate next)
         catch (JsonException)
         {
             await RejectAsync(context, -32700, "The request body must contain valid JSON.").ConfigureAwait(false);
+            return;
+        }
+        catch (BadHttpRequestException exception)
+        {
+            await RejectAsync(context, -32600, "The request body could not be read.", statusCode: exception.StatusCode).ConfigureAwait(false);
             return;
         }
         finally
