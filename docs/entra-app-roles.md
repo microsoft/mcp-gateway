@@ -37,29 +37,15 @@ Follow these steps to enable application roles, assign them to identities, and p
 
   > If no `requiredRoles` is configured, it by default ALLOW ALL READ access.
 
-## 4. Authorize Built-in Agent Tools (`bash`, `read_file`, `write_file`)
+## 4. Built-in Agent Tools Are Disabled (`bash`, `read_file`, `write_file`)
 
-The in-process built-in tools run shell commands and read/write files inside the gateway pod, so they are treated as a **privileged capability** rather than an ordinary resource. Unlike adapters/tools, they have no per-resource `requiredRoles`; access is gated on the **caller's role** — at agent create/update time *and* again at run time (tool resolution and invocation) — with **no creator bypass**. Even the author of an agent must hold the required role to reference or invoke a built-in.
+Built-in tools are disabled for every caller, including `mcp.admin`, agent creators, and callers with previously configured built-in roles such as `mcp.builtin`.
 
-- **Default (fail-closed):** only callers holding `mcp.admin` may reference or invoke built-in tools.
-- To grant built-in access without full admin, create a dedicated app role (e.g. `mcp.builtin`), assign it (Section 2), then configure it on the gateway:
+- Agent create/update requests containing `builtin:` references return `400 Bad Request`.
+- Built-ins in existing agent definitions are omitted from tool discovery, and previously resolved calls are rejected without execution.
+- `BuiltinToolSettings:RequiredRoles` is retained for configuration compatibility only; neither it nor additional role assignments can enable built-in execution.
 
-  ```jsonc
-  // appsettings.json
-  {
-    "BuiltinToolSettings": {
-      "RequiredRoles": [ "mcp.builtin" ]
-    }
-  }
-  ```
-
-  The same setting via environment variables (e.g. in the pod spec) uses the array index form:
-
-  ```
-  BuiltinToolSettings__RequiredRoles__0=mcp.builtin
-  ```
-
-  `mcp.admin` is always permitted in addition to any configured roles. Leaving `RequiredRoles` empty keeps built-ins admin-only.
+Remove built-in references when updating agents. Authorization for registered MCP tools, subagents, adapters, and workload identity is unchanged.
 
 ## 5. Authorize Workload Identity on Adapters and Tools (`useWorkloadIdentity`)
 

@@ -256,7 +256,7 @@ namespace Microsoft.McpGateway.Management.Tests
             _sessionStore.Verify(s => s.UpsertAsync(It.IsAny<SessionResource>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
-        // ---- Built-in tools: privileged capability gate ----
+        // ---- Built-in tools: disabled for every caller ----
 
         [TestMethod]
         public async Task ResolveAsync_ShouldExcludeBuiltin_WhenCallerNotAuthorized()
@@ -268,23 +268,41 @@ namespace Microsoft.McpGateway.Management.Tests
             resolved.Should().BeEmpty();
         }
 
-        [TestMethod]
-        public async Task ResolveAsync_ShouldIncludeBuiltin_WhenCallerAuthorized()
+        [DataTestMethod]
+        [DataRow("mcp.admin")]
+        [DataRow("mcp.builtin")]
+        public async Task ResolveAsync_ShouldExcludeAllBuiltins_EvenWhenCallerAuthorized(string role)
         {
             var registry = CreateBuiltinRegistry(authorized: true);
 
-            var resolved = await registry.ResolveAsync(["builtin:bash"], Caller("admin-poc", "mcp.admin"), CancellationToken.None);
+            var resolved = await registry.ResolveAsync(
+                ["builtin:bash", "builtin:read_file", "builtin:write_file", "BUILTIN:bash"],
+                Caller("authorized-user", role),
+                CancellationToken.None);
 
-            resolved.Should().ContainSingle()
-                .Which.Should().BeOfType<BuiltinResolvedTool>()
-                .Which.Name.Should().Be(BuiltinToolExecutor.Bash);
+            resolved.Should().BeEmpty();
+        }
+
+        [TestMethod]
+        public void BuildChatTools_ShouldOmitPreviouslyResolvedBuiltins_AndKeepOtherTools()
+        {
+            var tool = CreateTool("allowed-tool", "user1");
+            var agent = CreateAgent("allowed-agent", "user1");
+
+            var schemas = AgentToolRegistry.BuildChatTools([
+                new McpResolvedTool(tool.Name, tool),
+                new BuiltinResolvedTool(BuiltinToolExecutor.Bash),
+                new BuiltinResolvedTool(BuiltinToolExecutor.ReadFile),
+                new BuiltinResolvedTool(BuiltinToolExecutor.WriteFile),
+                new SubAgentResolvedTool("agent_allowed-agent", agent),
+            ]);
+
+            schemas.Select(schema => schema.FunctionName).Should().Equal("allowed-tool", "agent_allowed-agent");
         }
 
         [TestMethod]
         public async Task ExecuteAsync_ShouldDenyBuiltin_WhenCallerNotAuthorized()
         {
-            // A real BuiltinToolExecutor is wired up, so reaching it would spawn
-            // bash; the authorization gate must short-circuit before that.
             var registry = CreateBuiltinRegistry(authorized: false);
 
             var result = await registry.ExecuteAsync(
@@ -296,7 +314,32 @@ namespace Microsoft.McpGateway.Management.Tests
                 CancellationToken.None);
 
             result.IsError.Should().BeTrue();
-            result.Content.Should().Contain("permission");
+            result.Content.Should().Contain(BuiltinToolExecutor.DisabledMessage);
+        }
+
+        [DataTestMethod]
+        [DataRow(BuiltinToolExecutor.Bash, "mcp.admin")]
+        [DataRow(BuiltinToolExecutor.ReadFile, "mcp.admin")]
+        [DataRow(BuiltinToolExecutor.WriteFile, "mcp.admin")]
+        [DataRow(BuiltinToolExecutor.Bash, "mcp.builtin")]
+        [DataRow(BuiltinToolExecutor.ReadFile, "mcp.builtin")]
+        [DataRow(BuiltinToolExecutor.WriteFile, "mcp.builtin")]
+        public async Task ExecuteAsync_ShouldDenyPreviouslyResolvedBuiltin_EvenWhenCallerAuthorized(string kind, string role)
+        {
+            var registry = CreateBuiltinRegistry(authorized: true);
+
+            var result = await registry.ExecuteAsync(
+                new BuiltinResolvedTool(kind),
+                "{\"command\":\"echo hi\",\"path\":\"marker.txt\",\"content\":\"executed\"}",
+                parentSessionId: "existing-session",
+                workingDirectory: null,
+                Caller("authorized-user", role),
+                CancellationToken.None);
+
+            result.IsError.Should().BeTrue();
+            result.Content.Should().Contain(BuiltinToolExecutor.DisabledMessage);
+            _httpFactory.Verify(factory => factory.CreateClient(It.IsAny<string>()), Times.Never);
+            _runnerFactoryCalls.Should().Be(0);
         }
     }
 }

@@ -21,8 +21,7 @@ namespace Microsoft.McpGateway.Management.Foundry
         // Tool names in AgentData are namespaced by prefix:
         //   "mcp:<name>"     → routed to an MCP tool pod
         //   "agent:<name>"   → spawn a child session against a peer agent (subagent / Task pattern)
-        //   "builtin:<name>" → in-process built-ins implemented by BuiltinToolExecutor
-        //                      (currently bash / read_file / write_file)
+        //   "builtin:<name>" -> disabled; retained references are skipped.
         // Unknown / unprefixed names are skipped with a log entry.
         private const string McpPrefix = "mcp:";
         private const string AgentPrefix = "agent:";
@@ -37,9 +36,7 @@ namespace Microsoft.McpGateway.Management.Foundry
         private readonly IAgentResourceStore _agentStore;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly IPermissionProvider _permissionProvider;
-        private readonly IBuiltinToolAuthorizer _builtinToolAuthorizer;
         private readonly SubAgentInvoker? _subAgentInvoker;
-        private readonly BuiltinToolExecutor? _builtinExecutor;
         private readonly ILogger<AgentToolRegistry> _logger;
 
         public AgentToolRegistry(
@@ -56,10 +53,9 @@ namespace Microsoft.McpGateway.Management.Foundry
             _agentStore = agentStore ?? throw new ArgumentNullException(nameof(agentStore));
             _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
             _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
-            _builtinToolAuthorizer = builtinToolAuthorizer ?? throw new ArgumentNullException(nameof(builtinToolAuthorizer));
+            ArgumentNullException.ThrowIfNull(builtinToolAuthorizer);
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _subAgentInvoker = subAgentInvoker;
-            _builtinExecutor = builtinExecutor;
         }
 
         /// <summary>
@@ -123,30 +119,10 @@ namespace Microsoft.McpGateway.Management.Foundry
                 }
                 if (raw.StartsWith(BuiltinPrefix, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (_builtinExecutor == null)
-                    {
-                        _logger.LogWarning("Tool '{tool}' requires BuiltinToolExecutor but none is registered; skipping.", raw);
-                        continue;
-                    }
-                    var name = raw[BuiltinPrefix.Length..];
-                    var fn = "builtin_" + name;
-                    if (!BuiltinToolExecutor.SupportedKinds.Contains(fn, StringComparer.Ordinal))
-                    {
-                        _logger.LogWarning("Unknown builtin tool '{tool}'; supported: {kinds}.", raw, string.Join(",", BuiltinToolExecutor.SupportedKinds));
-                        continue;
-                    }
-                    // Built-ins are privileged in-process capabilities with no backing
-                    // resource ACL; gate them on the effective caller's role so they are
-                    // never advertised to the model for an unauthorized run.
-                    if (!_builtinToolAuthorizer.IsAuthorized(accessContext))
-                    {
-                        _logger.LogWarning("Caller lacks permission to use built-in tool '{tool}'; excluding from resolved tools.", raw);
-                        continue;
-                    }
-                    resolved.Add(new BuiltinResolvedTool(fn));
+                    _logger.LogWarning("Built-in tool '{tool}' is disabled; excluding from resolved tools.", raw);
                     continue;
                 }
-                _logger.LogInformation("Skipping unprefixed tool '{tool}' (expected one of mcp:/agent:/builtin:).", raw);
+                _logger.LogInformation("Skipping unprefixed tool '{tool}' (expected mcp: or agent:).", raw);
             }
             return resolved;
         }
@@ -176,31 +152,9 @@ namespace Microsoft.McpGateway.Management.Foundry
             {
                 McpResolvedTool mcp => await ExecuteMcpAsync(mcp, argumentsJson, accessContext, cancellationToken).ConfigureAwait(false),
                 SubAgentResolvedTool sub => await ExecuteSubAgentAsync(sub, argumentsJson, parentSessionId, accessContext, cancellationToken).ConfigureAwait(false),
-                BuiltinResolvedTool builtin => await ExecuteBuiltinAsync(builtin, argumentsJson, workingDirectory, accessContext, cancellationToken).ConfigureAwait(false),
+                BuiltinResolvedTool => new ToolResult(JsonSerializer.Serialize(new { error = BuiltinToolExecutor.DisabledMessage }), IsError: true),
                 _ => new ToolResult(JsonSerializer.Serialize(new { error = $"Unsupported tool kind '{tool.GetType().Name}'." }), IsError: true),
             };
-        }
-
-        private Task<ToolResult> ExecuteBuiltinAsync(BuiltinResolvedTool tool, string argumentsJson, string? workingDirectory, ClaimsPrincipal accessContext, CancellationToken cancellationToken)
-        {
-            if (_builtinExecutor == null)
-            {
-                return Task.FromResult(new ToolResult("{\"error\":\"BuiltinToolExecutor is not registered.\"}", IsError: true));
-            }
-            // Re-authorize at invocation time (defense in depth, mirrors the MCP /
-            // subagent re-authorization) so a caller who lost the required role
-            // after the run began — or who is running another user's agent — cannot
-            // execute privileged built-ins even if one slipped past resolution.
-            if (!_builtinToolAuthorizer.IsAuthorized(accessContext))
-            {
-                _logger.LogWarning("Caller lacks permission to execute built-in tool {tool} at invocation time; denying.", tool.Name);
-                return Task.FromResult(new ToolResult(JsonSerializer.Serialize(new { error = "You do not have permission to invoke this built-in tool." }), IsError: true));
-            }
-            if (string.IsNullOrWhiteSpace(workingDirectory))
-            {
-                return Task.FromResult(new ToolResult("{\"error\":\"Built-in tools require a session WorkingDirectory.\"}", IsError: true));
-            }
-            return _builtinExecutor.ExecuteAsync(tool.Name, argumentsJson, workingDirectory, cancellationToken);
         }
 
         private async Task<ToolResult> ExecuteMcpAsync(McpResolvedTool tool, string argumentsJson, ClaimsPrincipal accessContext, CancellationToken cancellationToken)
@@ -337,11 +291,6 @@ namespace Microsoft.McpGateway.Management.Foundry
                                 functionParameters: schema));
                             break;
                         }
-                    case BuiltinResolvedTool builtin:
-                        {
-                            list.Add(BuiltinToolExecutor.BuildChatTool(builtin.Name));
-                            break;
-                        }
                 }
             }
             return list;
@@ -359,8 +308,7 @@ namespace Microsoft.McpGateway.Management.Foundry
     public sealed record SubAgentResolvedTool(string Name, AgentResource Agent) : ResolvedTool(Name);
 
     /// <summary>
-    /// In-process built-in tool (bash / read_file / write_file). <see cref="Name"/>
-    /// matches one of <see cref="BuiltinToolExecutor.SupportedKinds"/>.
+    /// Legacy handle for a disabled built-in tool (bash / read_file / write_file).
     /// </summary>
     public sealed record BuiltinResolvedTool(string Name) : ResolvedTool(Name);
 
