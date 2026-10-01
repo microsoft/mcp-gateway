@@ -10,6 +10,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Contracts;
+using Microsoft.McpGateway.Management.Foundry;
 using Microsoft.McpGateway.Management.Service;
 using Microsoft.McpGateway.Management.Store;
 using ModelContextProtocol.Protocol;
@@ -125,18 +126,24 @@ namespace Microsoft.McpGateway.Management.Tests
                 .WithMessage("An agent with the same name already exists.");
         }
 
-        [TestMethod]
-        public async Task CreateAsync_ShouldAcceptKnownBuiltins()
+        [DataTestMethod]
+        [DataRow("builtin:bash", "mcp.admin")]
+        [DataRow("builtin:read_file", "mcp.admin")]
+        [DataRow("builtin:write_file", "mcp.admin")]
+        [DataRow("builtin:bash", "mcp.builtin")]
+        [DataRow("builtin:read_file", "mcp.builtin")]
+        [DataRow("builtin:write_file", "mcp.builtin")]
+        public async Task CreateAsync_ShouldRejectBuiltins_EvenWhenCallerAuthorized(string tool, string role)
         {
-            var request = CreateAgentData("agent-b", new List<string>
-            {
-                "builtin:bash", "builtin:read_file", "builtin:write_file",
-            });
+            var request = CreateAgentData("agent-b", [tool]);
             _agentStoreMock.Setup(x => x.TryGetAsync("agent-b", It.IsAny<CancellationToken>())).ReturnsAsync((AgentResource?)null);
+            var caller = new ClaimsPrincipal(new ClaimsIdentity(
+                [new(ClaimTypes.NameIdentifier, "user1"), new(ClaimTypes.Role, role)], "test"));
 
-            var result = await _service.CreateAsync(_accessContext, request, CancellationToken.None);
+            Func<Task> act = () => _service.CreateAsync(caller, request, CancellationToken.None);
 
-            result.Tools.Should().BeEquivalentTo(request.Tools);
+            await act.Should().ThrowAsync<ArgumentException>().WithMessage($"*{BuiltinToolExecutor.DisabledMessage}");
+            _agentStoreMock.Verify(x => x.UpsertAsync(It.IsAny<AgentResource>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [TestMethod]
@@ -159,7 +166,7 @@ namespace Microsoft.McpGateway.Management.Tests
 
             Func<Task> act = () => _service.CreateAsync(_accessContext, request, CancellationToken.None);
 
-            await act.Should().ThrowAsync<UnauthorizedAccessException>().WithMessage("*built-in tool 'builtin:bash'*");
+            await act.Should().ThrowAsync<ArgumentException>().WithMessage($"*{BuiltinToolExecutor.DisabledMessage}");
             _agentStoreMock.Verify(x => x.UpsertAsync(It.IsAny<AgentResource>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
@@ -187,8 +194,43 @@ namespace Microsoft.McpGateway.Management.Tests
 
             Func<Task> act = () => _service.UpdateAsync(_accessContext, request, CancellationToken.None);
 
-            await act.Should().ThrowAsync<UnauthorizedAccessException>().WithMessage("*built-in tool 'builtin:bash'*");
+            await act.Should().ThrowAsync<ArgumentException>().WithMessage($"*{BuiltinToolExecutor.DisabledMessage}");
             _agentStoreMock.Verify(x => x.UpsertAsync(It.IsAny<AgentResource>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [DataTestMethod]
+        [DataRow("builtin:bash", "mcp.admin")]
+        [DataRow("builtin:read_file", "mcp.admin")]
+        [DataRow("builtin:write_file", "mcp.admin")]
+        [DataRow("builtin:bash", "mcp.builtin")]
+        [DataRow("builtin:read_file", "mcp.builtin")]
+        [DataRow("builtin:write_file", "mcp.builtin")]
+        public async Task UpdateAsync_ShouldRejectRetainedBuiltins_EvenWhenCallerAuthorized(string tool, string role)
+        {
+            var request = CreateAgentData("agent-builtin-existing", [tool]);
+            var existing = AgentResource.Create(request, "user1", DateTimeOffset.UtcNow);
+            _agentStoreMock.Setup(x => x.TryGetAsync(request.Name, It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+            var caller = new ClaimsPrincipal(new ClaimsIdentity(
+                [new(ClaimTypes.NameIdentifier, "user1"), new(ClaimTypes.Role, role)], "test"));
+
+            Func<Task> act = () => _service.UpdateAsync(caller, request, CancellationToken.None);
+
+            await act.Should().ThrowAsync<ArgumentException>().WithMessage($"*{BuiltinToolExecutor.DisabledMessage}");
+            _agentStoreMock.Verify(x => x.UpsertAsync(It.IsAny<AgentResource>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [TestMethod]
+        public async Task UpdateAsync_ShouldAllowRemovingDisabledBuiltins()
+        {
+            var existing = AgentResource.Create(
+                CreateAgentData("agent-builtin-existing", ["builtin:bash", "builtin:read_file", "builtin:write_file"]),
+                "user1", DateTimeOffset.UtcNow);
+            _agentStoreMock.Setup(x => x.TryGetAsync(existing.Name, It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+
+            var result = await _service.UpdateAsync(_accessContext, CreateAgentData(existing.Name), CancellationToken.None);
+
+            result.Tools.Should().BeEmpty();
+            _agentStoreMock.Verify(x => x.UpsertAsync(It.IsAny<AgentResource>(), It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [TestMethod]

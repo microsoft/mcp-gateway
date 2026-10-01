@@ -170,11 +170,8 @@ builder.Services.AddSingleton<IKubeClientWrapper>(c =>
 });
 builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
 
-// Authorization for the privileged in-process built-in tools (bash / read_file /
-// write_file). Registered unconditionally because AgentManagementService validates
-// built-in references even when the Foundry runtime below is not configured.
-// Fail-closed: with no BuiltinToolSettings:RequiredRoles configured, only callers
-// holding mcp.admin may reference or invoke built-ins.
+// Legacy built-in role settings are retained for configuration compatibility.
+// Built-in tools are disabled regardless of role assignments.
 builder.Services.Configure<BuiltinToolSettings>(builder.Configuration.GetSection("BuiltinToolSettings"));
 builder.Services.AddSingleton<IBuiltinToolAuthorizer, BuiltinToolAuthorizer>();
 

@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Contracts;
 using Microsoft.McpGateway.Management.Extensions;
+using Microsoft.McpGateway.Management.Foundry;
 using Microsoft.McpGateway.Management.Store;
 
 namespace Microsoft.McpGateway.Management.Service
@@ -19,19 +20,10 @@ namespace Microsoft.McpGateway.Management.Service
     public class AgentManagementService : IAgentManagementService
     {
         private const string NamePattern = "^[a-z0-9-]+$";
-        // Mirrors Foundry.BuiltinToolExecutor.SupportedKinds ("builtin_<name>")
-        // but expressed as the public, prefixed AgentData.Tools form.
-        private static readonly HashSet<string> KnownBuiltins = new(StringComparer.Ordinal)
-        {
-            "builtin:bash",
-            "builtin:read_file",
-            "builtin:write_file",
-        };
 
         private readonly IAgentResourceStore _store;
         private readonly IToolResourceStore _toolStore;
         private readonly IPermissionProvider _permissionProvider;
-        private readonly IBuiltinToolAuthorizer _builtinToolAuthorizer;
         private readonly ILogger _logger;
 
         public AgentManagementService(
@@ -44,7 +36,7 @@ namespace Microsoft.McpGateway.Management.Service
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _toolStore = toolStore ?? throw new ArgumentNullException(nameof(toolStore));
             _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
-            _builtinToolAuthorizer = builtinToolAuthorizer ?? throw new ArgumentNullException(nameof(builtinToolAuthorizer));
+            ArgumentNullException.ThrowIfNull(builtinToolAuthorizer);
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
@@ -170,9 +162,8 @@ namespace Microsoft.McpGateway.Management.Service
         /// <list type="bullet">
         ///   <item><description><c>mcp:&lt;tool-name&gt;</c> — a tool registered via <c>/tools</c> that the caller has read access to.</description></item>
         ///   <item><description><c>agent:&lt;agent-name&gt;</c> — a peer agent the caller has read access to.</description></item>
-        ///   <item><description><c>builtin:&lt;name&gt;</c> — one of the in-process built-ins (<c>bash</c>, <c>read_file</c>, <c>write_file</c>).</description></item>
         /// </list>
-        /// Throws <see cref="ArgumentException"/> for unknown / unprefixed
+        /// Throws <see cref="ArgumentException"/> for disabled, unknown / unprefixed
         /// names and missing references; throws
         /// <see cref="UnauthorizedAccessException"/> when the caller lacks
         /// read access on a referenced resource.
@@ -193,7 +184,7 @@ namespace Microsoft.McpGateway.Management.Service
                 var colon = entry.IndexOf(':');
                 if (colon <= 0 || colon == entry.Length - 1)
                 {
-                    throw new ArgumentException($"Tool entry '{entry}' is missing a recognized prefix (expected 'mcp:', 'agent:', or 'builtin:').");
+                    throw new ArgumentException($"Tool entry '{entry}' is missing a recognized prefix (expected 'mcp:' or 'agent:').");
                 }
 
                 var prefix = entry.Substring(0, colon);
@@ -226,23 +217,10 @@ namespace Microsoft.McpGateway.Management.Service
                         break;
 
                     case "builtin":
-                        if (!KnownBuiltins.Contains(entry))
-                        {
-                            throw new ArgumentException($"Unknown built-in tool '{entry}'. Supported: {string.Join(", ", KnownBuiltins)}.");
-                        }
-                        // Built-ins are privileged in-process capabilities (shell / file
-                        // access) with no backing resource ACL, so gate them on the caller's
-                        // role — never on agent ownership. This blocks persisting an agent
-                        // that references built-ins the caller may not use.
-                        if (!_builtinToolAuthorizer.IsAuthorized(accessContext))
-                        {
-                            _logger.LogWarning("User {userId} denied reference to built-in tool {tool} while saving agent {agent}.", accessContext.GetUserId(), entry.Sanitize(), request.Name.Sanitize());
-                            throw new UnauthorizedAccessException($"You do not have permission to reference built-in tool '{entry}'.");
-                        }
-                        break;
+                        throw new ArgumentException($"Tool '{entry}' cannot be referenced. {BuiltinToolExecutor.DisabledMessage}");
 
                     default:
-                        throw new ArgumentException($"Tool entry '{entry}' uses an unrecognized prefix '{prefix}:' (expected 'mcp:', 'agent:', or 'builtin:').");
+                        throw new ArgumentException($"Tool entry '{entry}' uses an unrecognized prefix '{prefix}:' (expected 'mcp:' or 'agent:').");
                 }
             }
         }
