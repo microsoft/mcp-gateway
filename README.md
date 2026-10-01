@@ -208,9 +208,9 @@ The MCP Gateway now supports **tool registration** with dynamic routing capabili
 
 ### Agents and Sessions (Preview)
 
-> **Preview / single-replica.** This subsystem is opt-in and intended for evaluation and single-pod deployments. Built-in tools execute in-process inside the gateway pod, and per-session state (working directory, disk-quota counters) is local to that pod. Do not enable this in a multi-replica or multi-tenant production deployment without adding an out-of-process sandbox and shared session storage.
+> **Preview / single-replica.** This subsystem is opt-in and intended for evaluation and single-pod deployments. Session working directories are local to that pod. Built-in tool execution is disabled; registered MCP tools and subagents remain available. Do not enable this in a multi-replica or multi-tenant production deployment without addressing session storage and workload isolation.
 
-The gateway can optionally run LLM-driven *agents* that call registered MCP tools and a small set of built-in tools (`builtin:bash`, `builtin:read_file`, `builtin:write_file`). The agent CRUD endpoints (`/agents`, `/sessions` GET/DELETE/LIST) are always available, but **streaming session execution** (`POST /sessions/run`, `POST /sessions/{id}/messages`) is only enabled when `FoundrySettings:Endpoint` is configured. Without it, a streaming request fails fast with an `error` SSE event saying that Foundry must be configured.
+The gateway can optionally run LLM-driven *agents* that call registered MCP tools and other agents. The agent CRUD endpoints (`/agents`, `/sessions` GET/DELETE/LIST) are always available, but **streaming session execution** (`POST /sessions/run`, `POST /sessions/{id}/messages`) is only enabled when `FoundrySettings:Endpoint` is configured. Without it, a streaming request fails fast with an `error` SSE event saying that Foundry must be configured.
 
 #### Enabling
 
@@ -247,7 +247,7 @@ Content-Type: application/json
 `tools` entries are namespaced by prefix:
 - `mcp:<tool-name>` — routes to a tool registered via `/tools`.
 - `agent:<agent-name>` — delegates to another agent (subagent / Task pattern).
-- `builtin:bash`, `builtin:read_file`, `builtin:write_file` — in-process built-ins (see *Built-in tools and limits* below).
+- `builtin:bash`, `builtin:read_file`, `builtin:write_file` - disabled and rejected (see *Built-in tools and limits* below).
 
 Referenced `mcp:` and `agent:` resources are validated at agent create/update time: the call fails if the resource does not exist or the caller lacks read access, so an agent can never reference tools or peer agents the creator could not invoke directly.
 
@@ -276,14 +276,13 @@ Content-Type: application/json
 
 #### Built-in tools and limits
 
-When an agent lists `builtin:bash` / `builtin:read_file` / `builtin:write_file` in its `tools`, those built-ins run **in the gateway pod** under a per-session working directory. They are guarded by:
+`builtin:bash`, `builtin:read_file`, and `builtin:write_file` are **disabled for all callers**, including `mcp.admin`. `BuiltinToolSettings:RequiredRoles` and role assignments cannot re-enable them. Shell and file execution have been removed from the built-in executor.
 
-- A scrubbed, default-deny process environment for `builtin:bash`: the spawned shell receives only a minimal allowlist (`PATH`, locale, `TERM`, `TZ`) with `HOME` / `TMPDIR` / `PWD` pinned to the session directory. The full gateway process environment is not inherited.
-- A regex denylist for clearly dangerous shell operations (`sudo`, network egress, mounts, package managers, etc.). This is *defense-in-depth*, not a sandbox.
-- 30s default / 120s max bash timeout; 16 KiB output cap per stream; 256 KiB max file size; 4 MiB total writes per session.
-- Path resolution rejects absolute paths and `..` traversal.
+- Creating or updating an agent with a `builtin:` reference returns `400 Bad Request`.
+- Existing definitions remain readable and deletable, but their built-in tools are not advertised to the model. Previously resolved built-in calls return a disabled-tool error without executing.
+- Remove `builtin:` entries when updating existing agents. Registered `mcp:` tools and `agent:` references are unaffected.
 
-For multi-tenant or production use, replace these with a real per-session sandbox (e.g. ephemeral pod, gVisor, firejail) — see the inline comments in `BuiltinToolExecutor.cs`.
+Use separately hosted MCP tools with appropriate workload isolation for operations that require shell or file access.
 
 ## Getting Started - Local Deployment
 
