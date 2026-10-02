@@ -1,0 +1,18 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: e2e-proxy-to-example
+spec:
+  podSelector:
+    matchLabels:
+      adapter/name: e2e-example
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              adapter/name: e2e-proxy
+      ports:
+        - protocol: TCP
+          port: 8000

@@ -3,10 +3,11 @@
 
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Extensions;
 using Microsoft.McpGateway.Management.Store;
-using Microsoft.McpGateway.Service.Session;
+using Microsoft.McpGateway.Service.Routing;
 
 namespace Microsoft.McpGateway.Service.Controllers
 {
@@ -14,16 +15,14 @@ namespace Microsoft.McpGateway.Service.Controllers
     [Authorize]
     public class AdapterReverseProxyController(
         IHttpClientFactory httpClientFactory,
-        IAdapterSessionStore sessionStore,
-        ISessionRoutingHandler sessionRoutingHandler,
+        IServiceNodeInfoProvider serviceNodeInfoProvider,
         IAdapterResourceStore adapterResourceStore,
         IPermissionProvider permissionProvider,
         ILogger<AdapterReverseProxyController> logger) : ControllerBase
     {
         private const string ToolGateway = "toolgateway";
         private readonly IHttpClientFactory httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
-        private readonly IAdapterSessionStore sessionStore = sessionStore ?? throw new ArgumentNullException(nameof(sessionStore));
-        private readonly ISessionRoutingHandler sessionRoutingHandler = sessionRoutingHandler ?? throw new ArgumentNullException(nameof(sessionRoutingHandler));
+        private readonly IServiceNodeInfoProvider serviceNodeInfoProvider = serviceNodeInfoProvider ?? throw new ArgumentNullException(nameof(serviceNodeInfoProvider));
         private readonly IAdapterResourceStore adapterResourceStore = adapterResourceStore ?? throw new ArgumentNullException(nameof(adapterResourceStore));
         private readonly IPermissionProvider permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
         private readonly ILogger<AdapterReverseProxyController> logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -38,60 +37,21 @@ namespace Microsoft.McpGateway.Service.Controllers
             if (!await EnsureAdapterReadAccessAsync(name, cancellationToken).ConfigureAwait(false))
                 return;
 
-            // The adapter identity authorized above is the only route this request is allowed to
-            // use. Bind both the session lookup and any newly created session to it so a session
-            // can never be resolved through a different adapter's route than the one it was
-            // created on (stale-session authorization bypass).
             var adapterName = name ?? ToolGateway;
-
-            var sessionId = AdapterSessionRoutingHandler.GetSessionId(HttpContext);
-            string? targetAddress;
-            if (string.IsNullOrEmpty(sessionId))
-                targetAddress = await sessionRoutingHandler.GetNewSessionTargetAsync(adapterName, HttpContext, cancellationToken).ConfigureAwait(false);
-            else
-                targetAddress = await sessionRoutingHandler.GetExistingSessionTargetAsync(adapterName, HttpContext, cancellationToken).ConfigureAwait(false);
-
-            if (targetAddress == null)
+            var nodes = await serviceNodeInfoProvider.GetNodeAddressesAsync(adapterName, cancellationToken).ConfigureAwait(false);
+            if (nodes.Count == 0)
             {
                 HttpContext.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                 return;
             }
 
+            var targetAddress = nodes.Values.ElementAt(Random.Shared.Next(nodes.Count));
             // Only the first-party tool gateway route (no adapter name on the URL) is trusted with the
             // shared gateway secret. Adapter pods are user supplied and must never receive it.
-            var proxiedRequest = HttpProxy.CreateProxiedHttpRequest(HttpContext, (uri) => ReplaceUriAddress(uri, targetAddress), forwardGatewaySecret: name is null);
+            using var proxiedRequest = HttpProxy.CreateProxiedHttpRequest(HttpContext, (uri) => ReplaceUriAddress(uri, targetAddress), forwardGatewaySecret: name is null);
 
             using var client = httpClientFactory.CreateClient(Constants.HttpClientNames.AdapterProxyClient);
-            var response = await client.SendAsync(proxiedRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-
-            if (string.IsNullOrEmpty(sessionId))
-            {
-                sessionId = AdapterSessionRoutingHandler.GetSessionId(response);
-                if (!string.IsNullOrEmpty(sessionId))
-                {
-                    // The session id is supplied by the downstream adapter, which is not fully
-                    // trusted. Validate its shape before persisting; a malicious adapter could
-                    // otherwise return a crafted value that pollutes another user's scoped key
-                    // or breaks routing semantics.
-                    if (!AdapterSessionRoutingHandler.IsValidSessionId(sessionId))
-                    {
-                        logger.LogWarning("Downstream adapter returned an invalid session id for adapter {adapterName}.", adapterName.Sanitize());
-
-                        // Drop the invalid value from the proxied response so clients cannot
-                        // cache or replay it — there is no scoped-key entry it could ever
-                        // resolve to, and forwarding it would create a confusing handle.
-                        response.Headers.Remove("mcp-session-id");
-                    }
-                    else
-                    {
-                        // Bind the session to the authenticated user and the adapter route it was
-                        // created on so subsequent lookups require the same user identity and the
-                        // same adapter the caller is authorized for.
-                        var scopedKey = AdapterSessionRoutingHandler.BuildScopedSessionKey(HttpContext, adapterName, sessionId);
-                        await sessionStore.SetAsync(scopedKey, targetAddress, cancellationToken).ConfigureAwait(false);
-                    }
-                }
-            }
+            using var response = await client.SendAsync(proxiedRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
 
             await HttpProxy.CopyProxiedHttpResponseAsync(HttpContext, response, cancellationToken).ConfigureAwait(false);
         }
@@ -130,13 +90,12 @@ namespace Microsoft.McpGateway.Service.Controllers
 
             var newBaseUri = new Uri(newAddress, UriKind.Absolute);
             var path = '/' + string.Join('/', segments.Skip(2));
-            if (path.EndsWith("/messages"))
-                path += "/";
 
             var newUriBuilder = new UriBuilder(newBaseUri.Scheme, newBaseUri.Host, newBaseUri.Port)
             {
                 Path = path,
-                Query = originalUri.Query.TrimStart('?'),
+                Query = QueryString.Create(QueryHelpers.ParseQuery(originalUri.Query)
+                    .Where(parameter => !string.Equals(parameter.Key, "session_id", StringComparison.OrdinalIgnoreCase))).Value,
                 Fragment = originalUri.Fragment.TrimStart('#')
             };
 

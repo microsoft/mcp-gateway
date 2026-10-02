@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Badge,
   Button,
@@ -32,13 +32,18 @@ import {
   PlayRegular,
   PlugConnected24Regular,
   PlugDisconnected24Regular,
+  StopRegular,
 } from "@fluentui/react-icons";
 import { useGateway } from "../auth/PortalProvider";
 import { formatApiError } from "../hooks/useAsync";
+import { isRecord, MCP_VERSION, toolHeaders } from "../api/mcp";
+import { readMcpBody } from "../api/mcpStream";
 
 const useStyles = makeStyles({
   root: {
     display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr)",
+    minWidth: 0,
     gap: "12px",
   },
   headerRow: {
@@ -51,6 +56,7 @@ const useStyles = makeStyles({
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
+    overflowWrap: "anywhere",
   },
   serverInfo: {
     display: "flex",
@@ -204,7 +210,10 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
   const { api } = useGateway();
 
   // -- session / discovery state ---------------------------------------
-  const [sessionId, setSessionId] = useState<string | undefined>();
+  const [connected, setConnected] = useState(false);
+  const activeRequests = useRef(new Set<AbortController>());
+  const [pendingRequests, setPendingRequests] = useState(0);
+  const [streamEvents, setStreamEvents] = useState<string[]>([]);
   const [serverInfo, setServerInfo] = useState<ServerInfo | undefined>();
   const [tools, setTools] = useState<McpTool[]>([]);
   const [connecting, setConnecting] = useState(false);
@@ -221,7 +230,7 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
   // -- advanced (raw JSON-RPC) state -----------------------------------
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [rawText, setRawText] = useState<string>(
-    JSON.stringify(rawSamples.initialize, null, 2),
+    JSON.stringify(rawSamples["server/discover"], null, 2),
   );
   const [rawHistory, setRawHistory] = useState<HistoryEntry[]>([]);
   const [rawSending, setRawSending] = useState(false);
@@ -236,64 +245,69 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
     : "POST /mcp";
 
   const sendRpc = useCallback(
-    async (body: unknown, session?: string) => {
-      const response = await api.sendMcpRequest(resourceName, body, {
-        sessionId: session ?? sessionId,
-      });
-      const contentType = response.headers.get("content-type");
-      const newSession = response.headers.get("mcp-session-id");
-      const parsed = await readBody(response, contentType);
-      return { response, contentType, newSession, parsed };
+    async (body: unknown) => {
+      const controller = new AbortController();
+      activeRequests.current.add(controller);
+      setPendingRequests(activeRequests.current.size);
+      try {
+        const params = isRecord(body) && isRecord(body.params) ? body.params : {};
+        const response = await api.sendMcpRequest(resourceName, body, {
+          inputSchema: tools.find(tool => tool.name === params.name)?.inputSchema,
+          signal: controller.signal,
+        });
+        const contentType = response.headers.get("content-type");
+        const parsed = await readMcpBody(response, event => {
+          setStreamEvents(events => [...events.slice(-19), prettyJson(event).slice(0, 16384)]);
+        }, controller.signal);
+        return { response, contentType, parsed };
+      } finally {
+        activeRequests.current.delete(controller);
+        setPendingRequests(activeRequests.current.size);
+      }
     },
-    [api, resourceName, sessionId],
+    [api, resourceName, tools],
   );
 
-  // -- connect: initialize → notifications/initialized → tools/list ----
+  useEffect(() => {
+    setConnected(false);
+    setTools([]);
+    setServerInfo(undefined);
+    setRawHistory([]);
+    setStreamEvents([]);
+    setResult(undefined);
+    const requests = activeRequests.current;
+    return () => { requests.forEach(request => request.abort()); requests.clear(); };
+  }, [api, resourceName]);
+
   const connect = async () => {
     setConnecting(true);
+    setConnected(false);
     setConnectError(undefined);
+    setStreamEvents([]);
     setResult(undefined);
     setRunError(undefined);
     try {
-      const init = await sendRpc(
-        {
-          jsonrpc: "2.0",
-          id: 1,
-          method: "initialize",
-          params: {
-            protocolVersion: "2025-06-18",
-            capabilities: {},
-            clientInfo: { name: "mcp-gateway-portal", version: "0.1.0" },
-          },
-        },
-        undefined,
-      );
+      const init = await sendRpc({ jsonrpc: "2.0", id: ++counter, method: "server/discover" });
       if (!init.response.ok) {
+        extractRpcResult(init.parsed);
         throw new Error(
-          `initialize failed: HTTP ${init.response.status} ${init.response.statusText}`,
+          `server/discover failed: HTTP ${init.response.status}. The server must support MCP ${MCP_VERSION}.`,
         );
       }
       const initResult = extractRpcResult(init.parsed) as
-        | { protocolVersion?: string; serverInfo?: { name?: string; version?: string } }
+        | { supportedVersions?: string[]; _meta?: Record<string, { name?: string; version?: string }> }
         | undefined;
-      const newSession = init.newSession ?? undefined;
-      setSessionId(newSession);
+      if (!initResult?.supportedVersions?.includes(MCP_VERSION)) {
+        throw new Error(`The server does not support MCP ${MCP_VERSION}. Upgrade the adapter or use the legacy gateway image.`);
+      }
+      const info = initResult._meta?.["io.modelcontextprotocol/serverInfo"];
       setServerInfo({
-        name: initResult?.serverInfo?.name,
-        version: initResult?.serverInfo?.version,
-        protocolVersion: initResult?.protocolVersion,
+        name: info?.name,
+        version: info?.version,
+        protocolVersion: MCP_VERSION,
       });
 
-      // Ack the handshake (best-effort; MCP servers return 202 with null body).
-      await sendRpc(
-        { jsonrpc: "2.0", method: "notifications/initialized" },
-        newSession,
-      );
-
-      const list = await sendRpc(
-        { jsonrpc: "2.0", id: 2, method: "tools/list" },
-        newSession,
-      );
+      const list = await sendRpc({ jsonrpc: "2.0", id: ++counter, method: "tools/list" });
       if (!list.response.ok) {
         throw new Error(
           `tools/list failed: HTTP ${list.response.status} ${list.response.statusText}`,
@@ -302,8 +316,9 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
       const listResult = extractRpcResult(list.parsed) as
         | { tools?: McpTool[] }
         | undefined;
-      const fetched = listResult?.tools ?? [];
+      const fetched = validTools(listResult?.tools ?? []);
       setTools(fetched);
+      setConnected(true);
       // Prefer the pinned tool (tool detail page) so Run targets the tool the
       // user is looking at; otherwise auto-select the first tool so the user
       // immediately sees a runnable form.
@@ -325,7 +340,7 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
   };
 
   const refreshTools = async () => {
-    if (!sessionId) return;
+    if (!connected) return;
     setRefreshing(true);
     setRunError(undefined);
     try {
@@ -342,7 +357,7 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
       const listResult = extractRpcResult(list.parsed) as
         | { tools?: McpTool[] }
         | undefined;
-      setTools(listResult?.tools ?? []);
+      setTools(validTools(listResult?.tools ?? []));
     } catch (err) {
       setRunError(formatApiError(err));
     } finally {
@@ -351,7 +366,8 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
   };
 
   const disconnect = () => {
-    setSessionId(undefined);
+    activeRequests.current.forEach(request => request.abort());
+    setConnected(false);
     setServerInfo(undefined);
     setTools([]);
     setSelectedTool(undefined);
@@ -359,6 +375,7 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
     setResult(undefined);
     setRunError(undefined);
     setConnectError(undefined);
+    setStreamEvents([]);
   };
 
   const currentTool = tools.find((t) => t.name === selectedTool);
@@ -373,6 +390,7 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
   const runTool = async () => {
     if (!currentTool) return;
     setRunning(true);
+    setStreamEvents([]);
     setRunError(undefined);
     setResult(undefined);
     try {
@@ -386,19 +404,14 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
         },
       });
       if (!call.response.ok) {
+        extractRpcResult(call.parsed);
         throw new Error(
           `tools/call failed: HTTP ${call.response.status} ${call.response.statusText}`,
         );
       }
       const callResult = extractRpcResult(call.parsed) as ToolCallResult | undefined;
-      setResult(
-        callResult ?? {
-          isError: false,
-          content: [
-            { type: "text", text: "(server returned no result payload)" },
-          ],
-        },
-      );
+      if (!callResult) throw new Error("Server returned no result payload.");
+      setResult(callResult);
     } catch (err) {
       setRunError(formatApiError(err));
     } finally {
@@ -415,6 +428,7 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
   const sendRaw = async () => {
     setRawParseError(undefined);
     setRawTransportError(undefined);
+    setStreamEvents([]);
     let parsed: unknown;
     try {
       parsed = JSON.parse(rawText);
@@ -425,14 +439,8 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
     setRawSending(true);
     const started = performance.now();
     try {
-      const response = await api.sendMcpRequest(resourceName, parsed, {
-        sessionId,
-      });
+      const { response, contentType, parsed: body } = await sendRpc(parsed);
       const elapsed = Math.round(performance.now() - started);
-      const newSession = response.headers.get("mcp-session-id");
-      if (newSession && newSession !== sessionId) setSessionId(newSession);
-      const contentType = response.headers.get("content-type");
-      const body = await readBody(response, contentType);
       const method = extractMethod(parsed) ?? "<unknown>";
       const entry: HistoryEntry = {
         id: ++counter,
@@ -457,8 +465,6 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
 
   const rawLatest = rawHistory[0];
 
-  const connected = Boolean(sessionId);
-
   return (
     <Card className={styles.root}>
       <CardHeader
@@ -468,12 +474,8 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
           <div className={styles.sessionRow}>
             {connected ? (
               <>
-                <Tooltip content={sessionId!} relationship="label">
-                  <Badge appearance="filled" color="success">
-                    connected · session {sessionId!.slice(0, 6)}…
-                  </Badge>
-                </Tooltip>
-                <Tooltip content="Disconnect & reset session" relationship="label">
+                <Badge appearance="filled" color="success">connected</Badge>
+                <Tooltip content="Disconnect" relationship="label">
                   <Button
                     appearance="subtle"
                     icon={<DismissRegular />}
@@ -490,6 +492,21 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
         }
       />
 
+      {pendingRequests > 0 && (
+        <div className={styles.toolbar}>
+          <Spinner size="tiny" />
+          <Button icon={<StopRegular />} onClick={() => activeRequests.current.forEach(request => request.abort())}>
+            Cancel requests
+          </Button>
+        </div>
+      )}
+      {streamEvents.length > 0 && (
+        <div aria-live="polite">
+          <Caption1>Stream events</Caption1>
+          <pre className={styles.pre}>{streamEvents.join("\n\n")}</pre>
+        </div>
+      )}
+
       {/* connect / server info */}
       {!connected ? (
         <div className={styles.toolbar}>
@@ -501,10 +518,6 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
           >
             {connecting ? "Connecting…" : "Connect"}
           </Button>
-          <Caption1>
-            Runs <code>initialize</code> + <code>tools/list</code> against the
-            server and shows the discovered tools.
-          </Caption1>
         </div>
       ) : (
         <div className={styles.serverInfo}>
@@ -513,8 +526,7 @@ export function McpTestPanel({ resourceName, pinnedTool }: Props) {
             {serverInfo?.version ? ` · v${serverInfo.version}` : ""}
           </div>
           <Caption1>
-            MCP protocol {serverInfo?.protocolVersion ?? "unknown"} · session{" "}
-            <code>{sessionId}</code>
+            MCP {serverInfo?.protocolVersion ?? MCP_VERSION}
           </Caption1>
           <div className={styles.toolbar} style={{ marginTop: 4 }}>
             <Button
@@ -913,20 +925,7 @@ function ToolResultView({ result }: { result: ToolCallResult }) {
 // ---------- helpers ------------------------------------------------------
 
 const rawSamples: Record<string, object> = {
-  initialize: {
-    jsonrpc: "2.0",
-    id: 1,
-    method: "initialize",
-    params: {
-      protocolVersion: "2025-06-18",
-      capabilities: {},
-      clientInfo: { name: "mcp-gateway-portal", version: "0.1.0" },
-    },
-  },
-  "notifications/initialized": {
-    jsonrpc: "2.0",
-    method: "notifications/initialized",
-  },
+  "server/discover": { jsonrpc: "2.0", id: 1, method: "server/discover" },
   "tools/list": { jsonrpc: "2.0", id: 2, method: "tools/list" },
   "tools/call": {
     jsonrpc: "2.0",
@@ -934,8 +933,15 @@ const rawSamples: Record<string, object> = {
     method: "tools/call",
     params: { name: "<tool-name>", arguments: {} },
   },
-  ping: { jsonrpc: "2.0", id: 4, method: "ping" },
+  "subscriptions/listen": { jsonrpc: "2.0", id: 4, method: "subscriptions/listen", params: { notifications: { toolsListChanged: true } } },
 };
+
+function validTools(tools: McpTool[]): McpTool[] {
+  return tools.filter(tool => {
+    try { toolHeaders(tool.inputSchema, {}); return true; }
+    catch { return false; }
+  });
+}
 
 function defaultArgsFor(schema: JsonSchema | undefined): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -963,71 +969,21 @@ function extractRpcResult(body: unknown): unknown {
   }
   if (typeof body === "object") {
     const obj = body as { result?: unknown; error?: unknown };
-    if (obj.result !== undefined) return obj.result;
+    if (obj.error !== undefined) {
+      const error = isRecord(obj.error) ? obj.error : {};
+      throw new Error(`${error.message ?? "MCP request failed"} (${error.code ?? "unknown"})`);
+    }
+    if (obj.result !== undefined) {
+      const result = isRecord(obj.result) ? obj.result : {};
+      if (result.resultType !== "complete") {
+        throw new Error(result.resultType === "input_required"
+          ? "This call requires additional client input; the result is incomplete."
+          : `Unsupported or missing resultType: ${String(result.resultType)}`);
+      }
+      return obj.result;
+    }
   }
   return undefined;
-}
-
-async function readBody(
-  response: Response,
-  contentType: string | null,
-): Promise<unknown> {
-  // MCP servers may answer with either JSON or text/event-stream. We accept
-  // both: SSE is decoded line by line and the `data:` payloads are collected
-  // into an array.
-  if (contentType?.includes("text/event-stream")) {
-    return await readSse(response);
-  }
-  const text = await response.text();
-  if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
-}
-
-async function readSse(response: Response): Promise<unknown[]> {
-  const reader = response.body?.getReader();
-  if (!reader) return [];
-  const decoder = new TextDecoder();
-  let buffer = "";
-  const events: unknown[] = [];
-
-  // Accept both LF-only and CRLF event delimiters and flush any trailing
-  // partial event when the stream closes — FastMCP / streamable-http servers
-  // emit `\r\n\r\n` between events and may not append a final blank line.
-  const flush = (chunk: string) => {
-    const data = chunk
-      .split(/\r?\n/)
-      .filter((l) => l.startsWith("data:"))
-      .map((l) => l.slice(5).trim())
-      .join("\n");
-    if (!data) return;
-    try {
-      events.push(JSON.parse(data));
-    } catch {
-      events.push(data);
-    }
-  };
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    // Match a blank line that may use either LF or CRLF separators.
-    const re = /\r?\n\r?\n/g;
-    let match: RegExpExecArray | null;
-    let lastEnd = 0;
-    while ((match = re.exec(buffer)) !== null) {
-      flush(buffer.slice(lastEnd, match.index));
-      lastEnd = match.index + match[0].length;
-    }
-    buffer = lastEnd > 0 ? buffer.slice(lastEnd) : buffer;
-  }
-  // Final flush: some servers close the stream without a trailing blank line.
-  if (buffer.trim()) flush(buffer);
-  return events;
 }
 
 function extractMethod(req: unknown): string | undefined {

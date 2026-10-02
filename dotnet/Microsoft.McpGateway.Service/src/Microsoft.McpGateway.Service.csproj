@@ -27,6 +27,10 @@
     <ProjectReference Include="..\..\Microsoft.McpGateway.Management\src\Microsoft.McpGateway.Management.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Microsoft.McpGateway.Service.Tests" />
+  </ItemGroup>
+
   <!--
     The portal SPA is built (npm ci + npm run build) into wwwroot/portal as
     part of `dotnet publish` so the container image always contains the

@@ -31,15 +31,13 @@ public class McpSubPathAwareAuthenticationHandler : AuthenticationHandler<McpAut
         // Check if the request is for the resource metadata endpoint
         string requestPath = Request.Path.Value ?? string.Empty;
 
-        string expectedMetadataPath = Options.ResourceMetadataUri?.ToString() ?? string.Empty;
-        if (Options.ResourceMetadataUri != null && !Options.ResourceMetadataUri.IsAbsoluteUri)
-        {
-            // For relative URIs, it's just the path component.
-            expectedMetadataPath = Options.ResourceMetadataUri.OriginalString;
-        }
+        var metadataUri = Options.ResourceMetadataUri;
+        if (metadataUri is null)
+            return false;
+        string expectedMetadataPath = metadataUri.IsAbsoluteUri ? metadataUri.AbsolutePath : metadataUri.OriginalString;
 
         // If the path doesn't match, let the request continue through the pipeline
-        if (!requestPath.StartsWith(expectedMetadataPath, StringComparison.OrdinalIgnoreCase))
+        if (!new PathString(requestPath).StartsWithSegments(expectedMetadataPath, StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
@@ -50,7 +48,9 @@ public class McpSubPathAwareAuthenticationHandler : AuthenticationHandler<McpAut
     /// <summary>
     /// Gets the base URL from the current request, including scheme, host, and path base.
     /// </summary>
-    private string GetBaseUrl() => $"{Request.Scheme}://{Request.Host}{Request.PathBase}";
+    private string GetBaseUrl() => Uri.TryCreate(Options.ResourceMetadata?.Resource, UriKind.Absolute, out var resourceUri)
+        ? resourceUri.GetLeftPart(UriPartial.Authority) + Request.PathBase
+        : throw new InvalidOperationException("ResourceMetadata.Resource must configure the public origin.");
 
     private string GetCurrentPath() => Request.Path.HasValue ? Request.Path.Value! : string.Empty;
 
@@ -87,7 +87,7 @@ public class McpSubPathAwareAuthenticationHandler : AuthenticationHandler<McpAut
 
         if (Options.Events.OnResourceMetadataRequest is not null)
         {
-            var resourceMetadataUri = Options.ResourceMetadataUri;
+            var resourceMetadataUri = Options.ResourceMetadataUri ?? throw new InvalidOperationException("ResourceMetadataUri must be configured.");
             var prefix = new PathString(resourceMetadataUri.IsAbsoluteUri ? resourceMetadataUri.AbsolutePath : resourceMetadataUri.OriginalString);
 
             if (!Request.Path.StartsWithSegments(prefix, out var subPath))
@@ -160,9 +160,12 @@ public class McpSubPathAwareAuthenticationHandler : AuthenticationHandler<McpAut
             return null;
         }
 
+        if (!Uri.TryCreate(resourceMetadata.Resource, UriKind.Absolute, out var resourceUri))
+            throw new InvalidOperationException("ResourceMetadata.Resource must be an absolute URI.");
+
         return new ProtectedResourceMetadata
         {
-            Resource = new Uri(resourceMetadata.Resource, subPath),
+            Resource = new Uri(resourceUri, subPath).AbsoluteUri,
             AuthorizationServers = [.. resourceMetadata.AuthorizationServers],
             BearerMethodsSupported = [.. resourceMetadata.BearerMethodsSupported],
             ScopesSupported = [.. resourceMetadata.ScopesSupported],

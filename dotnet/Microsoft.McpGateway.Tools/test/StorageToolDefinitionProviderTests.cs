@@ -108,10 +108,20 @@ namespace Microsoft.McpGateway.Tools.Tests
                 Method = "tools/list"
             };
 
-            return new RequestContext<ListToolsRequestParams>(mcpServerMock.Object, jsonRpcRequest)
-            {
-                Params = new ListToolsRequestParams()
-            };
+            return new RequestContext<ListToolsRequestParams>(mcpServerMock.Object, jsonRpcRequest, new ListToolsRequestParams());
+        }
+
+        [TestMethod]
+        public async Task ListToolsAsync_ReturnsSortedPrivateImmediatelyStaleCatalog()
+        {
+            _toolResourceStoreMock.Setup(store => store.ListAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new[] { CreateToolResource("zulu"), CreateToolResource("alpha") });
+
+            var result = await _provider.ListToolsAsync(CreateListToolsContext());
+
+            result.Tools.Select(tool => tool.Name).Should().Equal("alpha", "zulu");
+            result.TimeToLive.Should().Be(TimeSpan.Zero);
+            result.CacheScope.Should().Be(CacheScope.Private);
         }
 
         [TestMethod]

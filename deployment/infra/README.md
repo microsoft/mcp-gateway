@@ -15,29 +15,32 @@ Use the PowerShell deployment script for better control and separation of concer
 
 **Prerequisites:**
 - Azure CLI installed and authenticated (`az login`)
-- PowerShell 5.1 or higher
+- PowerShell 7.4 or higher
 - Appropriate Azure permissions
 
 **Basic Usage:**
 
 ```powershell
-.\Deploy-McpGateway.ps1 -ResourceGroupName "rg-mcpgateway-dev" -ClientId "<your-entra-client-id>"
+.\deployment\Deploy-McpGateway.ps1 -SubscriptionId "<subscription-id>" -TenantId "<tenant-id>" -ResourceGroupName "rg-mcpgateway-dev" -ResourceLabel "mcpdev" -ClientId "<your-entra-client-id>" -Stage Infrastructure
 ```
+
+Run examples from the repository root. Use a lowercase alphanumeric `ResourceLabel`, even when the resource group name contains hyphens. Configure HTTPS before sending bearer tokens; without certificate parameters the template exposes an HTTP listener intended only for infrastructure bring-up.
 
 **Advanced Usage:**
 
 ```powershell
 # Deploy to a specific region with a custom resource label
-.\Deploy-McpGateway.ps1 `
+.\deployment\Deploy-McpGateway.ps1 `
     -ResourceGroupName "rg-mcpgateway-prod" `
     -ClientId "<your-entra-client-id>" `
     -ResourceLabel "mcpprod" `
     -Location "westus2"
 
 # Deploy with private endpoints enabled
-.\Deploy-McpGateway.ps1 `
+.\deployment\Deploy-McpGateway.ps1 `
     -ResourceGroupName "rg-mcpgateway-secure" `
     -ClientId "<your-entra-client-id>" `
+  -ResourceLabel "mcpsecure" `
     -EnablePrivateEndpoints
 ```
 
@@ -49,11 +52,48 @@ Use the PowerShell deployment script for better control and separation of concer
 | `ClientId` | Yes | Entra ID client ID for authentication |
 | `ResourceLabel` | No | Alphanumeric suffix for resource naming (3-30 chars). Defaults to resource group name |
 | `Location` | No | Azure region for deployment. Default: `westus3` |
-| `EnablePrivateEndpoints` | No | Switch to enable private endpoints for ACR and Cosmos DB |
+| `EnablePrivateEndpoints` | No | Create a Cosmos DB private endpoint and DNS link, and disable its public access; does not configure private ACR access |
+| `SubscriptionId`, `TenantId` | No | Select the subscription and verify its tenant; specify both for repeatable deployments |
+| `Stage` | No | `Infrastructure`, `Kubernetes`, or `All` (default) |
+| `DeploymentName` | No | ARM deployment name reused to read outputs; default `mcpgateway` |
+| `GatewayImage`, `ToolGatewayImage` | No | Exact first-party image references; supply your tested tags or digests rather than relying on default `latest` images |
+| `NodeCount`, `NodeVmSize` | No | Default: two `Standard_D4ds_v5` nodes; size a separate test deployment explicitly |
+| `AcrSku` | No | `Basic`, `Standard` (default), or `Premium` |
+| `CosmosServerless` | No | Enable serverless on a new test account; not an in-place conversion |
+| `SecureParametersFile` | No | Path to an ARM parameter file with secure TLS certificate values; keep outside source control |
+| `KubernetesTemplatePath` | No | Defaults to the checked-out `deployment/k8s/cloud-deployment-template.yml` |
+| `KubernetesNamespace` | No | Infrastructure namespace, default `adapter`; the Kubernetes stage reuses the namespace in the infrastructure outputs |
 
-### Option 2: Direct Bicep Deployment (Legacy)
+Set `-KubernetesNamespace mcp-gateway` during the infrastructure stage to use a non-default namespace. The namespace is shared by workload-identity subjects, Kubernetes resources, secret lookup, and gateway runtime settings. The Kubernetes stage reads the recorded namespace automatically and rejects conflicting overrides. Changing it requires an infrastructure update and does not move existing workloads or data.
 
-Deploy directly using Bicep with the embedded deployment script:
+### HTTPS and Image Deployment
+
+Provide `tlsCertificateData` (base64-encoded PFX) and `tlsCertificatePassword` as secure parameters through `SecureParametersFile`. Use a certificate valid for the public FQDN. Protect the parameter file and never commit or print its contents.
+
+Use the same subscription, tenant, resource label, client ID, and deployment name for both stages:
+
+1. Compile the Bicep template, run ARM validation, and inspect `what-if` using your selected sizing and secure parameters.
+2. Run `-Stage Infrastructure` to provision AKS, ACR, storage, and ingress.
+3. Build and publish the gateway, Tools, and adapter images to ACR. Record the exact image references.
+4. Ensure the deployment operator has Kubernetes data-plane permissions to create the namespace, Roles, RoleBindings, and secrets. Azure resource Owner alone does not grant these permissions on Azure-RBAC-enabled AKS; use an appropriately scoped AKS RBAC role.
+5. Run `-Stage Kubernetes` with `-GatewayImage` and `-ToolGatewayImage`. The script reads the local manifest and preserves an existing gateway secret in the deployment namespace or generates one when absent. An empty stored secret or failed lookup stops deployment; repair the secret or access before retrying.
+6. Verify the HTTPS `publicOrigin`, pod readiness, image digests, and authenticated MCP requests. Both clients and adapters must support MCP `2026-07-28`.
+
+For a new short-lived test deployment only, `-NodeCount 1 -NodeVmSize Standard_D4as_v5 -AcrSku Basic -CosmosServerless` reduces the default footprint, subject to current regional capacity and AKS requirements. Application Gateway still has a base charge. See [end-to-end testing](../e2e/README.md) for validation commands.
+
+### Option 2: Direct Bicep Deployment
+
+Deploy infrastructure directly using Bicep, then use the PowerShell Kubernetes
+stage with the same deployment name and exact image references. The examples
+disable the embedded script so image publishing can happen before pod creation.
+
+The embedded-script path includes the checked-out manifest when Bicep is compiled.
+Supply compatible `gatewayImage` and `toolGatewayImage` references, and use
+`kubernetesNamespace` for a non-default namespace. The script preserves an existing
+gateway secret or generates and stores one on first deployment. The optional
+`gatewaySecret` secure parameter must match an existing secret when supplied;
+secret rotation is a separate, coordinated operation. Empty stored secrets and
+failed Kubernetes commands stop deployment without replacing credentials.
 
 ```bash
 # Create resource group
@@ -63,8 +103,8 @@ az group create --name rg-mcpgateway-dev --location eastus
 az deployment group create \
   --name mcpgateway-deployment \
   --resource-group rg-mcpgateway-dev \
-  --template-file azure-deployment.bicep \
-  --parameters clientId=<your-entra-client-id>
+  --template-file deployment/infra/azure-deployment.bicep \
+  --parameters clientId=<your-entra-client-id> resourceLabel=mcpdev enableKubernetesDeploymentScript=false
 ```
 
 **With additional parameters:**
@@ -73,12 +113,13 @@ az deployment group create \
 az deployment group create \
   --name mcpgateway-deployment \
   --resource-group rg-mcpgateway-dev \
-  --template-file azure-deployment.bicep \
+  --template-file deployment/infra/azure-deployment.bicep \
   --parameters \
     clientId=<your-entra-client-id> \
     resourceLabel=mcpdev \
     location=westus2 \
-    enablePrivateEndpoints=true
+    enablePrivateEndpoints=true \
+    enableKubernetesDeploymentScript=false
 ```
 
 **Disable embedded Kubernetes deployment script:**
@@ -87,7 +128,7 @@ az deployment group create \
 az deployment group create \
   --name mcpgateway-deployment \
   --resource-group rg-mcpgateway-dev \
-  --template-file azure-deployment.bicep \
+  --template-file deployment/infra/azure-deployment.bicep \
   --parameters \
     clientId=<your-entra-client-id> \
     enableKubernetesDeploymentScript=false
@@ -121,7 +162,8 @@ The deployment creates the following Azure resources:
 
 - **Application Gateway**: Layer 7 load balancer
   - Standard_v2 SKU
-  - HTTP frontend on port 80
+  - HTTPS frontend on port 443 when TLS parameters are supplied; otherwise HTTP on port 80
+  - Response buffering disabled and a 600-second backend timeout for streaming
   - Health probe for backend monitoring
 
 - **Public IP**: Static public IP with DNS label
@@ -140,13 +182,13 @@ The deployment creates the following Azure resources:
 ## Networking Options
 
 ### Public Access (Default)
-Resources are accessible over the internet with proper authentication.
+The template requests public network access by default. Organization policy may override it; check effective settings. Use HTTPS and Entra authentication for gateway traffic. ACR anonymous pull and admin access are disabled; Cosmos local key authentication is disabled.
 
 ### Private Endpoints
 Enable with `-EnablePrivateEndpoints` flag:
-- ACR and Cosmos DB accessible only within VNet
-- Private DNS zones automatically configured
-- Ideal for production environments requiring network isolation
+- Cosmos DB is reachable through a private endpoint in the deployment VNet, with public access disabled
+- Its private DNS zone and VNet link are configured automatically
+- ACR remains publicly reachable with Entra authentication; private ACR networking is not implemented by this option
 
 ## Post-Deployment
 
@@ -154,17 +196,18 @@ After successful deployment:
 
 1. **Access the Gateway**: Use the FQDN from the deployment output
    ```
-   http://<public-ip-dns-label>.<region>.cloudapp.azure.com
+  https://<public-ip-dns-label>.<region>.cloudapp.azure.com
    ```
 
 2. **Verify Kubernetes Pods**:
+  Replace `adapter` with the configured namespace when using a non-default value.
    ```bash
    kubectl get pods -n adapter
    ```
 
 3. **Check Gateway Logs**:
    ```bash
-   kubectl logs -n adapter -l app=mcpgateway-service
+  kubectl logs -n adapter -l app=mcpgateway
    ```
 
 ## Troubleshooting
@@ -190,7 +233,7 @@ After successful deployment:
 ```bash
 az deployment group validate \
   --resource-group <rg-name> \
-  --template-file azure-deployment.bicep \
+  --template-file deployment/infra/azure-deployment.bicep \
   --parameters clientId=<your-client-id>
 ```
 
@@ -215,7 +258,7 @@ If you previously deployed using the embedded Bicep deployment script:
 1. The Bicep template now supports both methods via the `enableKubernetesDeploymentScript` parameter
 2. To update an existing deployment without the embedded script:
    ```powershell
-   .\Deploy-McpGateway.ps1 -ResourceGroupName <existing-rg> -ClientId <client-id>
+  .\deployment\Deploy-McpGateway.ps1 -ResourceGroupName <existing-rg> -ClientId <client-id> -ResourceLabel <existing-label>
    ```
 3. The PowerShell script will update the infrastructure and reconfigure Kubernetes resources
 
@@ -257,8 +300,8 @@ If you previously deployed using the embedded Bicep deployment script:
 - **Authentication**: Uses Entra ID (Azure AD) for authentication
 - **Authorization**: Azure RBAC for AKS, Cosmos DB RBAC for data access
 - **Network Isolation**: Optional private endpoints for enhanced security
-- **Identity**: Workload Identity for pod-level authentication (no secrets needed)
-- **Secrets**: Managed identities eliminate need for storing credentials
+- **Identity**: Workload Identity for Azure data access. A separate gateway secret authenticates first-party identity forwarding; user-deployed adapters must never receive it.
+- **Secrets**: Azure services use managed identities. The first-party forwarding credential is stored in a Kubernetes Secret in the deployment namespace and is not supplied to adapter pods.
 
 ## Additional Resources
 

@@ -1,5 +1,11 @@
 # Proxying Local & Remote MCP Servers
 
+This sample uses FastMCP 4 and exposes the modern MCP `2026-07-28` HTTP
+protocol. Use compatible upstream servers and clients, and test the methods
+and capabilities your workload needs. MCP Gateway itself does not translate
+legacy protocols or preserve upstream transport sessions. See the
+[migration guide](../../docs/mcp-2026-07-28.md).
+
 ## What’s New
 
 ### Proxying Local Stdio MCP Server
@@ -45,6 +51,12 @@ For proxying another internal mcp server hosted in streamable HTTP. Set the targ
 The referenced secret must contain a JSON object of upstream HTTP headers. Store
 credentials only in Key Vault. The gateway stores and returns the secret URL,
 but never receives the secret value. Raw `MCP_PROXY_HEADERS` values are rejected.
+
+The proxy pod must be able to reach that upstream endpoint. The default
+gateway network policy does not allow arbitrary adapter-to-adapter traffic;
+add a narrowly scoped rule when intentionally proxying another in-cluster
+adapter. Do not allow all adapters to reach one another merely to enable a
+single proxy chain.
 
 
 ## Examples

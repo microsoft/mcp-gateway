@@ -5,7 +5,7 @@ import re
 from collections.abc import Callable, Mapping
 from urllib.parse import urlparse
 
-import httpx
+import httpx2
 from azure.identity import WorkloadIdentityCredential
 from azure.keyvault.secrets import SecretClient
 from fastmcp.client.transports import StreamableHttpTransport
@@ -171,16 +171,16 @@ def load_key_vault_secret(secret_url: str) -> str:
 def create_no_redirect_http_client(
     *,
     headers: dict[str, str] | None = None,
-    auth: httpx.Auth | None = None,
-    timeout: httpx.Timeout | None = None,
+    auth: httpx2.Auth | None = None,
+    timeout: httpx2.Timeout | None = None,
     follow_redirects: bool = False,
-    transport: httpx.AsyncBaseTransport | None = None,
-) -> httpx.AsyncClient:
+    transport: httpx2.AsyncBaseTransport | None = None,
+) -> httpx2.AsyncClient:
     del follow_redirects
-    return httpx.AsyncClient(
+    return httpx2.AsyncClient(
         headers=headers,
         auth=auth,
-        timeout=timeout or httpx.Timeout(30.0, read=300.0),
+        timeout=timeout or httpx2.Timeout(30.0, read=300.0),
         follow_redirects=False,
         transport=transport,
     )

@@ -132,14 +132,17 @@ namespace Microsoft.McpGateway.Tools.Services
             var toolDefinitions = await GetToolDefinitionsAsync(cancellationToken).ConfigureAwait(false);
 
             // Convert to MCP Protocol Tools
-            var tools = toolDefinitions.Select(td => td.Tool).ToList();
+            var tools = toolDefinitions.Select(definition => definition.Tool)
+                .OrderBy(tool => tool.Name, StringComparer.Ordinal).ToList();
 
             _logger.LogInformation("Returning {Count} tools from storage", tools.Count);
 
             return new ListToolsResult
             {
                 Tools = tools,
-                NextCursor = null
+                NextCursor = null,
+                TimeToLive = TimeSpan.Zero,
+                CacheScope = CacheScope.Private
             };
         }
 

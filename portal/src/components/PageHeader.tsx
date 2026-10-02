@@ -27,6 +27,7 @@ const useStyles = makeStyles({
   },
   breadcrumb: {
     minHeight: "20px",
+    overflowX: "auto",
   },
   titleRow: {
     display: "flex",
@@ -66,12 +67,17 @@ const useStyles = makeStyles({
     alignItems: "center",
     gap: "6px",
     flexWrap: "wrap",
+    maxWidth: "100%",
+    "& .fui-Badge": { whiteSpace: "normal", overflowWrap: "anywhere", height: "auto", minHeight: "20px" },
   },
   commands: {
     display: "flex",
     alignItems: "center",
     gap: "8px",
     flexShrink: 0,
+    flexWrap: "wrap",
+    maxWidth: "100%",
+    minWidth: 0,
   },
 });
 

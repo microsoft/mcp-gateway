@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using k8s.Autorest;
 using k8s.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.McpGateway.Management.Contracts;
 using Microsoft.McpGateway.Management.Extensions;
 
@@ -20,14 +21,16 @@ namespace Microsoft.McpGateway.Management.Deployment
         private readonly IKubeClientWrapper _kubeClient;
         private readonly string _containerRegistryAddress;
         private readonly ILogger<KubernetesAdapterDeploymentManager> _logger;
+        private readonly string _namespace;
 
-        public KubernetesAdapterDeploymentManager(string containerRegistryAddress, IKubeClientWrapper kubeClient, ILogger<KubernetesAdapterDeploymentManager> logger)
+        public KubernetesAdapterDeploymentManager(string containerRegistryAddress, IKubeClientWrapper kubeClient, ILogger<KubernetesAdapterDeploymentManager> logger, IOptions<GatewayKubernetesOptions>? options = null)
         {
             ArgumentException.ThrowIfNullOrEmpty(containerRegistryAddress);
 
             _containerRegistryAddress = containerRegistryAddress;
             _kubeClient = kubeClient ?? throw new ArgumentNullException(nameof(kubeClient));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _namespace = options?.Value.Namespace ?? "adapter";
         }
 
         public async Task CreateDeploymentAsync(AdapterData request, ResourceType resourceType, CancellationToken cancellationToken)
@@ -129,7 +132,7 @@ namespace Microsoft.McpGateway.Management.Deployment
             _logger.LogInformation("Creating deployment for {name} with resource type {resourceType}.", request.Name.Sanitize(), resourceType.ToString().ToLowerInvariant());
             try
             {
-                await _kubeClient.UpsertStatefulSetAsync(statefulSet, AdapterNamespace, cancellationToken).ConfigureAwait(false);
+                await _kubeClient.UpsertStatefulSetAsync(statefulSet, _namespace, cancellationToken).ConfigureAwait(false);
                 _logger.LogInformation("Submitted Kubernetes deployment for {name}.", request.Name.Sanitize());
             }
             catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.Conflict)
@@ -139,7 +142,7 @@ namespace Microsoft.McpGateway.Management.Deployment
 
             try
             {
-                await _kubeClient.UpsertServiceAsync(service, AdapterNamespace, cancellationToken).ConfigureAwait(false);
+                await _kubeClient.UpsertServiceAsync(service, _namespace, cancellationToken).ConfigureAwait(false);
                 _logger.LogInformation("Submitted Kubernetes service for {name} with {serviceType} routing.", request.Name.Sanitize(), resourceType == ResourceType.Tool ? "stateless (ClusterIP)" : "stateful (headless)");
             }
             catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.Conflict)
@@ -152,7 +155,7 @@ namespace Microsoft.McpGateway.Management.Deployment
         {
             ValidateImageReference(request.ImageName, request.ImageVersion);
 
-            var statefulSet = await _kubeClient.ReadStatefulSetAsync(request.Name, AdapterNamespace, cancellationToken).ConfigureAwait(false);
+            var statefulSet = await _kubeClient.ReadStatefulSetAsync(request.Name, _namespace, cancellationToken).ConfigureAwait(false);
             
             var patch = new
             {
@@ -188,7 +191,7 @@ namespace Microsoft.McpGateway.Management.Deployment
 
             var patchContent = new V1Patch(JsonSerializer.Serialize(patch), V1Patch.PatchType.StrategicMergePatch);
             _logger.LogInformation("Updating deployment for {name} with resource type {resourceType}.", request.Name.Sanitize(), resourceType.ToString().ToLowerInvariant());
-            await _kubeClient.PatchStatefulSetAsync(patchContent, request.Name, AdapterNamespace, cancellationToken).ConfigureAwait(false);
+            await _kubeClient.PatchStatefulSetAsync(patchContent, request.Name, _namespace, cancellationToken).ConfigureAwait(false);
             _logger.LogInformation("Submitted updating deployment for {name}.", request.Name.Sanitize());
         }
 
@@ -197,9 +200,9 @@ namespace Microsoft.McpGateway.Management.Deployment
             try
             {
                 _logger.LogInformation("Deleting deployment for {name}.", name.Sanitize());
-                await _kubeClient.DeleteStatefulSetAsync(name, AdapterNamespace, cancellationToken).ConfigureAwait(false);
+                await _kubeClient.DeleteStatefulSetAsync(name, _namespace, cancellationToken).ConfigureAwait(false);
                 _logger.LogInformation("Submitted deleting deployment for {name}.", name.Sanitize());
-                await _kubeClient.DeleteServiceAsync($"{name}-service", AdapterNamespace, cancellationToken).ConfigureAwait(false);
+                await _kubeClient.DeleteServiceAsync($"{name}-service", _namespace, cancellationToken).ConfigureAwait(false);
                 _logger.LogInformation("Submitted deleting service for {name}.", name.Sanitize());
             }
             catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound)
@@ -210,7 +213,7 @@ namespace Microsoft.McpGateway.Management.Deployment
 
         public async Task<AdapterStatus> GetDeploymentStatusAsync(string name, CancellationToken cancellationToken)
         {
-            var statefulSet = await _kubeClient.ReadStatefulSetAsync(name, AdapterNamespace, cancellationToken).ConfigureAwait(false);
+            var statefulSet = await _kubeClient.ReadStatefulSetAsync(name, _namespace, cancellationToken).ConfigureAwait(false);
             var status = new AdapterStatus
             {
                 ReadyReplicas = statefulSet.Status.ReadyReplicas,
@@ -230,7 +233,7 @@ namespace Microsoft.McpGateway.Management.Deployment
         public async Task<string> GetDeploymentLogsAsync(string name, int ordinal = 0, CancellationToken cancellationToken = default)
         {
             var podName = $"{name}-{ordinal}";
-            using var logStream = await _kubeClient.GetContainerLogStream(podName, 1000, AdapterNamespace, cancellationToken).ConfigureAwait(false);
+            using var logStream = await _kubeClient.GetContainerLogStream(podName, 1000, _namespace, cancellationToken).ConfigureAwait(false);
             using var reader = new StreamReader(logStream);
             var logText = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             return logText;

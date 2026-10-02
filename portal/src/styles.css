@@ -24,3 +24,9 @@ code {
 a {
   color: inherit;
 }
+
+@media (max-width: 640px) {
+  .fui-TabList {
+    flex-wrap: wrap !important;
+  }
+}
