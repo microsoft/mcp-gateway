@@ -64,7 +64,7 @@ namespace Microsoft.McpGateway.Service.Controllers
                 if (adapter == null)
                     return NotFound();
                 else
-                    return Ok(await _adapterRichResultProvider.GetAdapterStatusAsync(adapter.Name, cancellationToken).ConfigureAwait(false));
+                    return Ok(await _adapterRichResultProvider.GetAdapterStatusAsync(adapter.Name, ResourceType.Mcp, cancellationToken).ConfigureAwait(false));
             }
             catch (UnauthorizedAccessException)
             {
@@ -82,7 +82,7 @@ namespace Microsoft.McpGateway.Service.Controllers
                 if (adapter == null)
                     return NotFound();
                 else
-                    return Ok(await _adapterRichResultProvider.GetAdapterLogsAsync(adapter.Name, instance, cancellationToken).ConfigureAwait(false));
+                    return Ok(await _adapterRichResultProvider.GetAdapterLogsAsync(adapter.Name, ResourceType.Mcp, instance, cancellationToken).ConfigureAwait(false));
             }
             catch (UnauthorizedAccessException)
             {

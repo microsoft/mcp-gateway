@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.McpGateway.Management.Authorization;
+using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Service.Controllers;
 using Microsoft.McpGateway.Service.Routing;
@@ -42,7 +43,7 @@ public class AdapterReverseProxyControllerTests
         context.Response.Body = new MemoryStream();
         var controller = new AdapterReverseProxyController(factory.Object, nodes.Object,
             Mock.Of<IAdapterResourceStore>(), Mock.Of<IPermissionProvider>(),
-            NullLogger<AdapterReverseProxyController>.Instance)
+            NullLogger<AdapterReverseProxyController>.Instance, Mock.Of<IKubeClientWrapper>())
         {
             ControllerContext = new ControllerContext { HttpContext = context }
         };

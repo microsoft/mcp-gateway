@@ -16,6 +16,12 @@ namespace Microsoft.McpGateway.Management.Deployment
     public class KubernetesAdapterDeploymentManager : IAdapterDeploymentManager
     {
         private const string AdapterNamespace = "adapter";
+        private const string TypeLabel = $"{AdapterNamespace}/type";
+        private const string NameLabel = $"{AdapterNamespace}/name";
+        // Name of the first-party tool gateway StatefulSet.
+        private const string ToolGatewayName = "toolgateway";
+        private const string NameInUseMessage = "A Kubernetes resource with the same name already exists.";
+        private const string NotOwnedMessage = "The deployment does not belong to this resource.";
         private static readonly Regex ValidImageNamePattern = new(@"^[a-z0-9]+([._/-][a-z0-9]+)*$", RegexOptions.Compiled);
         private static readonly Regex ValidImageVersionPattern = new(@"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$", RegexOptions.Compiled);
         private readonly IKubeClientWrapper _kubeClient;
@@ -37,10 +43,13 @@ namespace Microsoft.McpGateway.Management.Deployment
         {
             ValidateImageReference(request.ImageName, request.ImageVersion);
 
+            if (string.Equals(request.Name, ToolGatewayName, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("The name is reserved.");
+
             var labels = new Dictionary<string, string>
             {
-                { $"{AdapterNamespace}/type", resourceType.ToString().ToLowerInvariant() },
-                { $"{AdapterNamespace}/name", request.Name },
+                { TypeLabel, ToLabelValue(resourceType) },
+                { NameLabel, request.Name },
                 { "azure.workload.identity/use", request.UseWorkloadIdentity.ToString().ToLowerInvariant() }
             };
 
@@ -130,14 +139,18 @@ namespace Microsoft.McpGateway.Management.Deployment
             };
 
             _logger.LogInformation("Creating deployment for {name} with resource type {resourceType}.", request.Name.Sanitize(), resourceType.ToString().ToLowerInvariant());
+
+            // Creation is the atomic name reservation: never adopt an existing object, which may belong to another owner or resource type.
+            V1StatefulSet createdStatefulSet;
             try
             {
-                await _kubeClient.UpsertStatefulSetAsync(statefulSet, _namespace, cancellationToken).ConfigureAwait(false);
+                createdStatefulSet = await _kubeClient.UpsertStatefulSetAsync(statefulSet, _namespace, cancellationToken).ConfigureAwait(false);
                 _logger.LogInformation("Submitted Kubernetes deployment for {name}.", request.Name.Sanitize());
             }
-            catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.Conflict)
+            catch (HttpOperationException ex) when (ex.Response?.StatusCode == HttpStatusCode.Conflict)
             {
-                _logger.LogInformation("Kubernetes deployment for {name} already exists. Skip deployment.", request.Name.Sanitize());
+                _logger.LogWarning("Kubernetes deployment for {name} already exists. Refusing to create.", request.Name.Sanitize());
+                throw new ArgumentException(NameInUseMessage);
             }
 
             try
@@ -145,9 +158,24 @@ namespace Microsoft.McpGateway.Management.Deployment
                 await _kubeClient.UpsertServiceAsync(service, _namespace, cancellationToken).ConfigureAwait(false);
                 _logger.LogInformation("Submitted Kubernetes service for {name} with {serviceType} routing.", request.Name.Sanitize(), resourceType == ResourceType.Tool ? "stateless (ClusterIP)" : "stateful (headless)");
             }
-            catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.Conflict)
+            catch (Exception ex)
             {
-                _logger.LogInformation("Kubernetes service for {name} already exists. Skip service creation.", request.Name.Sanitize());
+                try
+                {
+                    await _kubeClient.DeleteStatefulSetAsync(request.Name, RequireUid(createdStatefulSet?.Metadata), _namespace, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception rollbackException)
+                {
+                    _logger.LogError(rollbackException, "Failed to roll back Kubernetes deployment for {name}.", request.Name.Sanitize());
+                }
+
+                if (ex is HttpOperationException { Response.StatusCode: HttpStatusCode.Conflict })
+                {
+                    _logger.LogWarning("Kubernetes service for {name} already exists. Refusing to create.", request.Name.Sanitize());
+                    throw new ArgumentException(NameInUseMessage);
+                }
+
+                throw;
             }
         }
 
@@ -155,10 +183,15 @@ namespace Microsoft.McpGateway.Management.Deployment
         {
             ValidateImageReference(request.ImageName, request.ImageVersion);
 
-            var statefulSet = await _kubeClient.ReadStatefulSetAsync(request.Name, _namespace, cancellationToken).ConfigureAwait(false);
-            
+            var statefulSet = await ReadOwnedStatefulSetAsync(request.Name, resourceType, cancellationToken).ConfigureAwait(false);
+
             var patch = new
             {
+                metadata = new
+                {
+                    uid = RequireUid(statefulSet.Metadata),
+                    resourceVersion = statefulSet.Metadata.ResourceVersion
+                },
                 spec = new
                 {
                     replicas = request.ReplicaCount,
@@ -168,8 +201,8 @@ namespace Microsoft.McpGateway.Management.Deployment
                         {
                             labels = new Dictionary<string, string>
                             {
-                                { $"{AdapterNamespace}/type", resourceType.ToString().ToLowerInvariant() },
-                                { $"{AdapterNamespace}/name", request.Name },
+                                { TypeLabel, ToLabelValue(resourceType) },
+                                { NameLabel, request.Name },
                                 { "azure.workload.identity/use", request.UseWorkloadIdentity.ToString().ToLowerInvariant() }
                             }
                         },
@@ -195,25 +228,45 @@ namespace Microsoft.McpGateway.Management.Deployment
             _logger.LogInformation("Submitted updating deployment for {name}.", request.Name.Sanitize());
         }
 
-        public async Task DeleteDeploymentAsync(string name, CancellationToken cancellationToken)
+        public async Task DeleteDeploymentAsync(string name, ResourceType resourceType, CancellationToken cancellationToken)
         {
-            try
-            {
-                _logger.LogInformation("Deleting deployment for {name}.", name.Sanitize());
-                await _kubeClient.DeleteStatefulSetAsync(name, _namespace, cancellationToken).ConfigureAwait(false);
-                _logger.LogInformation("Submitted deleting deployment for {name}.", name.Sanitize());
-                await _kubeClient.DeleteServiceAsync($"{name}-service", _namespace, cancellationToken).ConfigureAwait(false);
-                _logger.LogInformation("Submitted deleting service for {name}.", name.Sanitize());
-            }
-            catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound)
+            _logger.LogInformation("Deleting deployment for {name}.", name.Sanitize());
+
+            var statefulSet = await IgnoreNotFoundAsync(() => _kubeClient.ReadStatefulSetAsync(name, _namespace, cancellationToken)).ConfigureAwait(false);
+            if (statefulSet == null)
             {
                 _logger.LogWarning("Deployment for {name} does not exist in the cluster.", name.Sanitize());
             }
+            else if (IsOwnedBy(statefulSet.Spec?.Selector?.MatchLabels, name, resourceType))
+            {
+                await IgnoreNotFoundAsync(() => _kubeClient.DeleteStatefulSetAsync(name, RequireUid(statefulSet.Metadata), _namespace, cancellationToken)).ConfigureAwait(false);
+                _logger.LogInformation("Submitted deleting deployment for {name}.", name.Sanitize());
+            }
+            else
+            {
+                _logger.LogWarning("Skipped deleting deployment {name}: it does not belong to the {resourceType} resource.", name.Sanitize(), ToLabelValue(resourceType));
+            }
+
+            var serviceName = $"{name}-service";
+            var service = await IgnoreNotFoundAsync(() => _kubeClient.ReadServiceAsync(serviceName, _namespace, cancellationToken)).ConfigureAwait(false);
+            if (service == null)
+            {
+                _logger.LogWarning("Service for {name} does not exist in the cluster.", name.Sanitize());
+            }
+            else if (IsOwnedBy(service.Spec?.Selector, name, resourceType))
+            {
+                await IgnoreNotFoundAsync(() => _kubeClient.DeleteServiceAsync(serviceName, RequireUid(service.Metadata), _namespace, cancellationToken)).ConfigureAwait(false);
+                _logger.LogInformation("Submitted deleting service for {name}.", name.Sanitize());
+            }
+            else
+            {
+                _logger.LogWarning("Skipped deleting service for {name}: it does not belong to the {resourceType} resource.", name.Sanitize(), ToLabelValue(resourceType));
+            }
         }
 
-        public async Task<AdapterStatus> GetDeploymentStatusAsync(string name, CancellationToken cancellationToken)
+        public async Task<AdapterStatus> GetDeploymentStatusAsync(string name, ResourceType resourceType, CancellationToken cancellationToken)
         {
-            var statefulSet = await _kubeClient.ReadStatefulSetAsync(name, _namespace, cancellationToken).ConfigureAwait(false);
+            var statefulSet = await ReadOwnedStatefulSetAsync(name, resourceType, cancellationToken).ConfigureAwait(false);
             var status = new AdapterStatus
             {
                 ReadyReplicas = statefulSet.Status.ReadyReplicas,
@@ -230,13 +283,55 @@ namespace Microsoft.McpGateway.Management.Deployment
             return status;
         }
 
-        public async Task<string> GetDeploymentLogsAsync(string name, int ordinal = 0, CancellationToken cancellationToken = default)
+        public async Task<string> GetDeploymentLogsAsync(string name, ResourceType resourceType, int ordinal = 0, CancellationToken cancellationToken = default)
         {
+            var statefulSet = await ReadOwnedStatefulSetAsync(name, resourceType, cancellationToken).ConfigureAwait(false);
             var podName = $"{name}-{ordinal}";
+
+            // A same-named pod can outlive a deleted StatefulSet, so require the current StatefulSet as its owner.
+            var pod = await _kubeClient.ReadPodAsync(podName, _namespace, cancellationToken).ConfigureAwait(false);
+            var ownerUid = statefulSet.Metadata?.Uid;
+            if (string.IsNullOrEmpty(ownerUid) || pod?.Metadata?.OwnerReferences?.Any(o => o.Kind == "StatefulSet" && o.Uid == ownerUid) != true)
+            {
+                _logger.LogWarning("Pod {podName} does not belong to deployment {name}.", podName.Sanitize(), name.Sanitize());
+                throw new UnauthorizedAccessException(NotOwnedMessage);
+            }
+
             using var logStream = await _kubeClient.GetContainerLogStream(podName, 1000, _namespace, cancellationToken).ConfigureAwait(false);
             using var reader = new StreamReader(logStream);
             var logText = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             return logText;
+        }
+
+        private async Task<V1StatefulSet> ReadOwnedStatefulSetAsync(string name, ResourceType resourceType, CancellationToken cancellationToken)
+        {
+            var statefulSet = await _kubeClient.ReadStatefulSetAsync(name, _namespace, cancellationToken).ConfigureAwait(false);
+            if (statefulSet != null && IsOwnedBy(statefulSet.Spec?.Selector?.MatchLabels, name, resourceType))
+                return statefulSet;
+
+            _logger.LogWarning("Deployment {name} does not belong to the {resourceType} resource.", name.Sanitize(), ToLabelValue(resourceType));
+            throw new UnauthorizedAccessException(NotOwnedMessage);
+        }
+
+        // Selector labels are set at creation (immutable on StatefulSets) and identify the owning resource.
+        private static bool IsOwnedBy(IDictionary<string, string>? selector, string name, ResourceType resourceType) =>
+            DeploymentOwnership.Matches(selector, name, resourceType);
+
+        private static string RequireUid(V1ObjectMeta? metadata) =>
+            !string.IsNullOrEmpty(metadata?.Uid) ? metadata.Uid : throw new UnauthorizedAccessException(NotOwnedMessage);
+
+        private static string ToLabelValue(ResourceType resourceType) => resourceType.ToString().ToLowerInvariant();
+
+        private static async Task<T?> IgnoreNotFoundAsync<T>(Func<Task<T>> operation) where T : class
+        {
+            try
+            {
+                return await operation().ConfigureAwait(false);
+            }
+            catch (HttpOperationException ex) when (ex.Response?.StatusCode == HttpStatusCode.NotFound)
+            {
+                return null;
+            }
         }
 
         private static void ValidateImageReference(string imageName, string imageVersion)

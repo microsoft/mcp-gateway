@@ -22,9 +22,50 @@ namespace Microsoft.McpGateway.Management.Tests
         public KubernetesAdapterDeploymentManagerTests()
         {
             _kubeClientMock = new Mock<IKubeClientWrapper>();
+            _kubeClientMock.Setup(client => client.UpsertStatefulSetAsync(It.IsAny<V1StatefulSet>(), "adapter", It.IsAny<CancellationToken>()))
+                .ReturnsAsync((V1StatefulSet statefulSet, string namespaceName, CancellationToken cancellationToken) =>
+                {
+                    statefulSet.Metadata.Uid = "created-uid";
+                    return statefulSet;
+                });
             _loggerMock = new Mock<ILogger<KubernetesAdapterDeploymentManager>>();
             _manager = new KubernetesAdapterDeploymentManager("registry.io", _kubeClientMock.Object, _loggerMock.Object);
         }
+
+        private static Dictionary<string, string> OwnerLabels(string name, string type) => new()
+        {
+            ["adapter/type"] = type,
+            ["adapter/name"] = name,
+            ["azure.workload.identity/use"] = "false"
+        };
+
+        private static V1StatefulSet OwnedStatefulSet(string name, string type = "mcp", string uid = "sts-uid") => new()
+        {
+            Metadata = new V1ObjectMeta { Name = name, Uid = uid, ResourceVersion = "10" },
+            Spec = new V1StatefulSetSpec { Replicas = 1, Selector = new V1LabelSelector { MatchLabels = OwnerLabels(name, type) } }
+        };
+
+        private static V1Service OwnedService(string name, string type = "mcp") => new()
+        {
+            Metadata = new V1ObjectMeta { Name = $"{name}-service", Uid = "service-uid" },
+            Spec = new V1ServiceSpec { Selector = OwnerLabels(name, type) }
+        };
+
+        private static V1Pod PodOwnedBy(string podName, string ownerName, string ownerUid) => new()
+        {
+            Metadata = new V1ObjectMeta
+            {
+                Name = podName,
+                OwnerReferences = [new V1OwnerReference { Kind = "StatefulSet", Name = ownerName, Uid = ownerUid, Controller = true }]
+            }
+        };
+
+        private static HttpOperationException HttpError(HttpStatusCode statusCode) => new()
+        {
+            Response = new HttpResponseMessageWrapper(new HttpResponseMessage(statusCode), statusCode.ToString())
+        };
+
+        private static MemoryStream LogStream(string text) => new(System.Text.Encoding.UTF8.GetBytes(text));
 
         [TestMethod]
         public async Task CreateDeploymentAsync_ShouldCallUpsertMethods()
@@ -257,7 +298,7 @@ namespace Microsoft.McpGateway.Management.Tests
         }
 
         [TestMethod]
-        public async Task CreateDeploymentAsync_WhenStatefulSetExists_ShouldLogAndContinue()
+        public async Task CreateDeploymentAsync_WhenStatefulSetExists_ShouldThrowWithoutCreatingService()
         {
             var request = new AdapterData
             {
@@ -265,25 +306,20 @@ namespace Microsoft.McpGateway.Management.Tests
                 ImageName = "image",
                 ImageVersion = "v1",
                 ReplicaCount = 1
-            };
-
-            var conflictException = new HttpOperationException
-            {
-                Response = new HttpResponseMessageWrapper(
-                    new HttpResponseMessage(HttpStatusCode.Conflict),
-                    "Conflict")
             };
 
             _kubeClientMock.Setup(x => x.UpsertStatefulSetAsync(It.IsAny<V1StatefulSet>(), "adapter", It.IsAny<CancellationToken>()))
-                .ThrowsAsync(conflictException);
+                .ThrowsAsync(HttpError(HttpStatusCode.Conflict));
 
-            await _manager.CreateDeploymentAsync(request, ResourceType.Mcp, CancellationToken.None);
+            Func<Task> act = () => _manager.CreateDeploymentAsync(request, ResourceType.Tool, CancellationToken.None);
 
-            _kubeClientMock.Verify(x => x.UpsertServiceAsync(It.IsAny<V1Service>(), "adapter", It.IsAny<CancellationToken>()), Times.Once);
+            await act.Should().ThrowAsync<ArgumentException>().WithMessage("A Kubernetes resource with the same name already exists.");
+            _kubeClientMock.Verify(x => x.UpsertServiceAsync(It.IsAny<V1Service>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            _kubeClientMock.Verify(x => x.DeleteStatefulSetAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [TestMethod]
-        public async Task CreateDeploymentAsync_WhenServiceExists_ShouldLogAndComplete()
+        public async Task CreateDeploymentAsync_WhenServiceExists_ShouldRollBackStatefulSetAndThrow()
         {
             var request = new AdapterData
             {
@@ -293,19 +329,51 @@ namespace Microsoft.McpGateway.Management.Tests
                 ReplicaCount = 1
             };
 
-            var conflictException = new HttpOperationException
+            _kubeClientMock.Setup(x => x.UpsertServiceAsync(It.IsAny<V1Service>(), "adapter", It.IsAny<CancellationToken>()))
+                .ThrowsAsync(HttpError(HttpStatusCode.Conflict));
+
+            Func<Task> act = () => _manager.CreateDeploymentAsync(request, ResourceType.Mcp, CancellationToken.None);
+
+            await act.Should().ThrowAsync<ArgumentException>().WithMessage("A Kubernetes resource with the same name already exists.");
+            _kubeClientMock.Verify(x => x.DeleteStatefulSetAsync("adapter1", "created-uid", "adapter", It.IsAny<CancellationToken>()), Times.Once);
+            _kubeClientMock.Verify(x => x.DeleteServiceAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [TestMethod]
+        public async Task CreateDeploymentAsync_WhenServiceCreationFails_ShouldRollBackStatefulSetAndRethrow()
+        {
+            var request = new AdapterData
             {
-                Response = new HttpResponseMessageWrapper(
-                    new HttpResponseMessage(HttpStatusCode.Conflict),
-                    "Conflict")
+                Name = "adapter1",
+                ImageName = "image",
+                ImageVersion = "v1",
+                ReplicaCount = 1
             };
 
             _kubeClientMock.Setup(x => x.UpsertServiceAsync(It.IsAny<V1Service>(), "adapter", It.IsAny<CancellationToken>()))
-                .ThrowsAsync(conflictException);
+                .ThrowsAsync(HttpError(HttpStatusCode.UnprocessableEntity));
 
-            await _manager.CreateDeploymentAsync(request, ResourceType.Mcp, CancellationToken.None);
+            Func<Task> act = () => _manager.CreateDeploymentAsync(request, ResourceType.Mcp, CancellationToken.None);
 
-            _kubeClientMock.Verify(x => x.UpsertStatefulSetAsync(It.IsAny<V1StatefulSet>(), "adapter", It.IsAny<CancellationToken>()), Times.Once);
+            await act.Should().ThrowAsync<HttpOperationException>();
+            _kubeClientMock.Verify(x => x.DeleteStatefulSetAsync("adapter1", "created-uid", "adapter", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [TestMethod]
+        public async Task CreateDeploymentAsync_WithToolGatewayName_ShouldThrowWithoutCallingKubernetes()
+        {
+            var request = new AdapterData
+            {
+                Name = "toolgateway",
+                ImageName = "image",
+                ImageVersion = "v1",
+                ReplicaCount = 1
+            };
+
+            Func<Task> act = () => _manager.CreateDeploymentAsync(request, ResourceType.Mcp, CancellationToken.None);
+
+            await act.Should().ThrowAsync<ArgumentException>().WithMessage("The name is reserved.");
+            _kubeClientMock.VerifyNoOtherCalls();
         }
 
         [TestMethod]
@@ -320,17 +388,40 @@ namespace Microsoft.McpGateway.Management.Tests
                 EnvironmentVariables = new Dictionary<string, string> { { "ENV", "value" } }
             };
 
-            var statefulSet = new V1StatefulSet
-            {
-                Metadata = new V1ObjectMeta { Name = "adapter1" },
-                Spec = new V1StatefulSetSpec { Replicas = 1 }
-            };
-
-            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(statefulSet);
+            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(OwnedStatefulSet("adapter1"));
 
             await _manager.UpdateDeploymentAsync(request, ResourceType.Mcp, CancellationToken.None);
 
             _kubeClientMock.Verify(x => x.PatchStatefulSetAsync(It.IsAny<V1Patch>(), "adapter1", "adapter", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [TestMethod]
+        public async Task UpdateDeploymentAsync_WhenStatefulSetBelongsToOtherResourceType_ShouldThrowWithoutPatching()
+        {
+            var request = new AdapterData { Name = "shared-name", ImageName = "image", ImageVersion = "v2" };
+            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("shared-name", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(OwnedStatefulSet("shared-name", "mcp"));
+
+            Func<Task> act = () => _manager.UpdateDeploymentAsync(request, ResourceType.Tool, CancellationToken.None);
+
+            await act.Should().ThrowAsync<UnauthorizedAccessException>();
+            _kubeClientMock.Verify(x => x.PatchStatefulSetAsync(It.IsAny<V1Patch>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [TestMethod]
+        public async Task UpdateDeploymentAsync_WhenStatefulSetIsNotManagedByGateway_ShouldThrowWithoutPatching()
+        {
+            var request = new AdapterData { Name = "first-party", ImageName = "image", ImageVersion = "v2" };
+            var statefulSet = new V1StatefulSet
+            {
+                Metadata = new V1ObjectMeta { Name = "first-party", Uid = "sts-uid" },
+                Spec = new V1StatefulSetSpec { Selector = new V1LabelSelector { MatchLabels = new Dictionary<string, string> { ["app"] = "first-party" } } }
+            };
+            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("first-party", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(statefulSet);
+
+            Func<Task> act = () => _manager.UpdateDeploymentAsync(request, ResourceType.Mcp, CancellationToken.None);
+
+            await act.Should().ThrowAsync<UnauthorizedAccessException>();
+            _kubeClientMock.Verify(x => x.PatchStatefulSetAsync(It.IsAny<V1Patch>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [TestMethod]
@@ -345,13 +436,7 @@ namespace Microsoft.McpGateway.Management.Tests
                 EnvironmentVariables = new Dictionary<string, string>()
             };
 
-            var statefulSet = new V1StatefulSet
-            {
-                Metadata = new V1ObjectMeta { Name = "tool1" },
-                Spec = new V1StatefulSetSpec { Replicas = 1 }
-            };
-
-            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("tool1", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(statefulSet);
+            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("tool1", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(OwnedStatefulSet("tool1", "tool"));
 
             V1Patch? capturedPatch = null;
             _kubeClientMock.Setup(x => x.PatchStatefulSetAsync(It.IsAny<V1Patch>(), "tool1", "adapter", It.IsAny<CancellationToken>()))
@@ -378,13 +463,7 @@ namespace Microsoft.McpGateway.Management.Tests
                 EnvironmentVariables = new Dictionary<string, string>()
             };
 
-            var statefulSet = new V1StatefulSet
-            {
-                Metadata = new V1ObjectMeta { Name = "adapter1" },
-                Spec = new V1StatefulSetSpec { Replicas = 1 }
-            };
-
-            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(statefulSet);
+            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(OwnedStatefulSet("adapter1"));
 
             V1Patch? capturedPatch = null;
             _kubeClientMock.Setup(x => x.PatchStatefulSetAsync(It.IsAny<V1Patch>(), "adapter1", "adapter", It.IsAny<CancellationToken>()))
@@ -397,33 +476,75 @@ namespace Microsoft.McpGateway.Management.Tests
             var content = capturedPatch!.Content as string;
             content.Should().NotBeNull();
             content.Should().Contain("\"adapter/type\":\"mcp\"");
+            content.Should().Contain("\"uid\":\"sts-uid\"");
+            content.Should().Contain("\"resourceVersion\":\"10\"");
         }
 
         [TestMethod]
         public async Task DeleteDeploymentAsync_ShouldDeleteResources()
         {
-            await _manager.DeleteDeploymentAsync("adapter1", CancellationToken.None);
+            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(OwnedStatefulSet("adapter1"));
+            _kubeClientMock.Setup(x => x.ReadServiceAsync("adapter1-service", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(OwnedService("adapter1"));
 
-            _kubeClientMock.Verify(x => x.DeleteStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>()), Times.Once);
-            _kubeClientMock.Verify(x => x.DeleteServiceAsync("adapter1-service", "adapter", It.IsAny<CancellationToken>()), Times.Once);
+            await _manager.DeleteDeploymentAsync("adapter1", ResourceType.Mcp, CancellationToken.None);
+
+            _kubeClientMock.Verify(x => x.DeleteStatefulSetAsync("adapter1", "sts-uid", "adapter", It.IsAny<CancellationToken>()), Times.Once);
+            _kubeClientMock.Verify(x => x.DeleteServiceAsync("adapter1-service", "service-uid", "adapter", It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [TestMethod]
         public async Task DeleteDeploymentAsync_WhenNotFound_ShouldLogWarningAndComplete()
         {
-            var notFoundException = new HttpOperationException
+            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>()))
+                .ThrowsAsync(HttpError(HttpStatusCode.NotFound));
+            _kubeClientMock.Setup(x => x.ReadServiceAsync("adapter1-service", "adapter", It.IsAny<CancellationToken>()))
+                .ThrowsAsync(HttpError(HttpStatusCode.NotFound));
+
+            await _manager.DeleteDeploymentAsync("adapter1", ResourceType.Mcp, CancellationToken.None);
+
+            _kubeClientMock.Verify(x => x.DeleteStatefulSetAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            _kubeClientMock.Verify(x => x.DeleteServiceAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [TestMethod]
+        public async Task DeleteDeploymentAsync_WhenStatefulSetIsMissing_ShouldStillDeleteOwnedService()
+        {
+            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>()))
+                .ThrowsAsync(HttpError(HttpStatusCode.NotFound));
+            _kubeClientMock.Setup(x => x.ReadServiceAsync("adapter1-service", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(OwnedService("adapter1"));
+
+            await _manager.DeleteDeploymentAsync("adapter1", ResourceType.Mcp, CancellationToken.None);
+
+            _kubeClientMock.Verify(x => x.DeleteServiceAsync("adapter1-service", "service-uid", "adapter", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [TestMethod]
+        public async Task DeleteDeploymentAsync_WhenResourcesBelongToOtherResourceType_ShouldNotDeleteThem()
+        {
+            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("shared-name", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(OwnedStatefulSet("shared-name", "mcp"));
+            _kubeClientMock.Setup(x => x.ReadServiceAsync("shared-name-service", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(OwnedService("shared-name", "mcp"));
+
+            await _manager.DeleteDeploymentAsync("shared-name", ResourceType.Tool, CancellationToken.None);
+
+            _kubeClientMock.Verify(x => x.DeleteStatefulSetAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            _kubeClientMock.Verify(x => x.DeleteServiceAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [TestMethod]
+        public async Task DeleteDeploymentAsync_WhenServiceIsNotManagedByGateway_ShouldDeleteOnlyStatefulSet()
+        {
+            var firstPartyService = new V1Service
             {
-                Response = new HttpResponseMessageWrapper(
-                    new HttpResponseMessage(HttpStatusCode.NotFound),
-                    "Not Found")
+                Metadata = new V1ObjectMeta { Name = "mcpgateway-service" },
+                Spec = new V1ServiceSpec { Selector = new Dictionary<string, string> { ["app"] = "mcpgateway" } }
             };
+            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("mcpgateway", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(OwnedStatefulSet("mcpgateway"));
+            _kubeClientMock.Setup(x => x.ReadServiceAsync("mcpgateway-service", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(firstPartyService);
 
-            _kubeClientMock.Setup(x => x.DeleteStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>()))
-                .ThrowsAsync(notFoundException);
+            await _manager.DeleteDeploymentAsync("mcpgateway", ResourceType.Mcp, CancellationToken.None);
 
-            await _manager.DeleteDeploymentAsync("adapter1", CancellationToken.None);
-
-            _kubeClientMock.Verify(x => x.DeleteStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>()), Times.Once);
+            _kubeClientMock.Verify(x => x.DeleteStatefulSetAsync("mcpgateway", "sts-uid", "adapter", It.IsAny<CancellationToken>()), Times.Once);
+            _kubeClientMock.Verify(x => x.DeleteServiceAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [TestMethod]
@@ -435,6 +556,7 @@ namespace Microsoft.McpGateway.Management.Tests
                 Spec = new V1StatefulSetSpec
                 {
                     Replicas = 2,
+                    Selector = new V1LabelSelector { MatchLabels = OwnerLabels("adapter1", "mcp") },
                     Template = new V1PodTemplateSpec
                     {
                         Spec = new V1PodSpec
@@ -456,7 +578,7 @@ namespace Microsoft.McpGateway.Management.Tests
 
             _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(statefulSet);
 
-            var result = await _manager.GetDeploymentStatusAsync("adapter1", CancellationToken.None);
+            var result = await _manager.GetDeploymentStatusAsync("adapter1", ResourceType.Mcp, CancellationToken.None);
 
             result.ReadyReplicas.Should().Be(2);
             result.UpdatedReplicas.Should().Be(2);
@@ -474,6 +596,7 @@ namespace Microsoft.McpGateway.Management.Tests
                 Spec = new V1StatefulSetSpec
                 {
                     Replicas = 3,
+                    Selector = new V1LabelSelector { MatchLabels = OwnerLabels("adapter1", "mcp") },
                     Template = new V1PodTemplateSpec
                     {
                         Spec = new V1PodSpec
@@ -495,7 +618,7 @@ namespace Microsoft.McpGateway.Management.Tests
 
             _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(statefulSet);
 
-            var result = await _manager.GetDeploymentStatusAsync("adapter1", CancellationToken.None);
+            var result = await _manager.GetDeploymentStatusAsync("adapter1", ResourceType.Mcp, CancellationToken.None);
 
             result.ReadyReplicas.Should().Be(1);
             result.ReplicaStatus.Should().Be("Degraded: 1/3 ready");
@@ -510,6 +633,7 @@ namespace Microsoft.McpGateway.Management.Tests
                 Spec = new V1StatefulSetSpec
                 {
                     Replicas = 2,
+                    Selector = new V1LabelSelector { MatchLabels = OwnerLabels("adapter1", "mcp") },
                     Template = new V1PodTemplateSpec
                     {
                         Spec = new V1PodSpec
@@ -531,7 +655,7 @@ namespace Microsoft.McpGateway.Management.Tests
 
             _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(statefulSet);
 
-            var result = await _manager.GetDeploymentStatusAsync("adapter1", CancellationToken.None);
+            var result = await _manager.GetDeploymentStatusAsync("adapter1", ResourceType.Mcp, CancellationToken.None);
 
             result.ReadyReplicas.Should().BeNull();
             result.ReplicaStatus.Should().Be("Degraded: 0/2 ready");
@@ -546,6 +670,7 @@ namespace Microsoft.McpGateway.Management.Tests
                 Spec = new V1StatefulSetSpec
                 {
                     Replicas = 1,
+                    Selector = new V1LabelSelector { MatchLabels = OwnerLabels("adapter1", "mcp") },
                     Template = new V1PodTemplateSpec
                     {
                         Spec = new V1PodSpec
@@ -564,23 +689,29 @@ namespace Microsoft.McpGateway.Management.Tests
 
             _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(statefulSet);
 
-            var result = await _manager.GetDeploymentStatusAsync("adapter1", CancellationToken.None);
+            var result = await _manager.GetDeploymentStatusAsync("adapter1", ResourceType.Mcp, CancellationToken.None);
 
             result.Image.Should().Be("Unknown");
         }
 
         [TestMethod]
+        public async Task GetDeploymentStatusAsync_WhenStatefulSetBelongsToOtherResourceType_ShouldThrow()
+        {
+            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("shared-name", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(OwnedStatefulSet("shared-name", "mcp"));
+
+            Func<Task> act = () => _manager.GetDeploymentStatusAsync("shared-name", ResourceType.Tool, CancellationToken.None);
+
+            await act.Should().ThrowAsync<UnauthorizedAccessException>();
+        }
+
+        [TestMethod]
         public async Task GetDeploymentLogsAsync_ShouldReturnLogText()
         {
-            var logStream = new MemoryStream();
-            var writer = new StreamWriter(logStream);
-            writer.Write("log-content");
-            writer.Flush();
-            logStream.Position = 0;
+            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(OwnedStatefulSet("adapter1"));
+            _kubeClientMock.Setup(x => x.ReadPodAsync("adapter1-0", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(PodOwnedBy("adapter1-0", "adapter1", "sts-uid"));
+            _kubeClientMock.Setup(x => x.GetContainerLogStream("adapter1-0", 1000, "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(LogStream("log-content"));
 
-            _kubeClientMock.Setup(x => x.GetContainerLogStream("adapter1-0", 1000, "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(logStream);
-
-            var result = await _manager.GetDeploymentLogsAsync("adapter1", 0, CancellationToken.None);
+            var result = await _manager.GetDeploymentLogsAsync("adapter1", ResourceType.Mcp, 0, CancellationToken.None);
 
             result.Should().Be("log-content");
         }
@@ -588,18 +719,37 @@ namespace Microsoft.McpGateway.Management.Tests
         [TestMethod]
         public async Task GetDeploymentLogsAsync_WithDifferentOrdinal_ShouldUseDifferentPodName()
         {
-            var logStream = new MemoryStream();
-            var writer = new StreamWriter(logStream);
-            writer.Write("logs-from-pod-2");
-            writer.Flush();
-            logStream.Position = 0;
+            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(OwnedStatefulSet("adapter1"));
+            _kubeClientMock.Setup(x => x.ReadPodAsync("adapter1-2", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(PodOwnedBy("adapter1-2", "adapter1", "sts-uid"));
+            _kubeClientMock.Setup(x => x.GetContainerLogStream("adapter1-2", 1000, "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(LogStream("logs-from-pod-2"));
 
-            _kubeClientMock.Setup(x => x.GetContainerLogStream("adapter1-2", 1000, "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(logStream);
-
-            var result = await _manager.GetDeploymentLogsAsync("adapter1", 2, CancellationToken.None);
+            var result = await _manager.GetDeploymentLogsAsync("adapter1", ResourceType.Mcp, 2, CancellationToken.None);
 
             result.Should().Be("logs-from-pod-2");
             _kubeClientMock.Verify(x => x.GetContainerLogStream("adapter1-2", 1000, "adapter", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [TestMethod]
+        public async Task GetDeploymentLogsAsync_WhenStatefulSetBelongsToOtherResourceType_ShouldThrowWithoutReadingLogs()
+        {
+            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("shared-name", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(OwnedStatefulSet("shared-name", "mcp"));
+
+            Func<Task> act = () => _manager.GetDeploymentLogsAsync("shared-name", ResourceType.Tool, 0, CancellationToken.None);
+
+            await act.Should().ThrowAsync<UnauthorizedAccessException>();
+            _kubeClientMock.Verify(x => x.GetContainerLogStream(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [TestMethod]
+        public async Task GetDeploymentLogsAsync_WhenPodIsNotOwnedByCurrentStatefulSet_ShouldThrowWithoutReadingLogs()
+        {
+            _kubeClientMock.Setup(x => x.ReadStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(OwnedStatefulSet("adapter1", uid: "current-uid"));
+            _kubeClientMock.Setup(x => x.ReadPodAsync("adapter1-0", "adapter", It.IsAny<CancellationToken>())).ReturnsAsync(PodOwnedBy("adapter1-0", "adapter1", "previous-uid"));
+
+            Func<Task> act = () => _manager.GetDeploymentLogsAsync("adapter1", ResourceType.Mcp, 0, CancellationToken.None);
+
+            await act.Should().ThrowAsync<UnauthorizedAccessException>();
+            _kubeClientMock.Verify(x => x.GetContainerLogStream(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [TestMethod]

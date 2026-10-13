@@ -40,6 +40,7 @@ namespace Microsoft.McpGateway.Management.Foundry
         private readonly IPermissionProvider _permissionProvider;
         private readonly SubAgentInvoker? _subAgentInvoker;
         private readonly ILogger<AgentToolRegistry> _logger;
+        private readonly IKubeClientWrapper _kubeClient;
         private readonly string _namespace;
 
         public AgentToolRegistry(
@@ -49,6 +50,7 @@ namespace Microsoft.McpGateway.Management.Foundry
             IPermissionProvider permissionProvider,
             IBuiltinToolAuthorizer builtinToolAuthorizer,
             ILogger<AgentToolRegistry> logger,
+            IKubeClientWrapper kubeClient,
             SubAgentInvoker? subAgentInvoker = null,
             BuiltinToolExecutor? builtinExecutor = null,
             IOptions<GatewayKubernetesOptions>? kubernetesOptions = null)
@@ -59,6 +61,7 @@ namespace Microsoft.McpGateway.Management.Foundry
             _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
             ArgumentNullException.ThrowIfNull(builtinToolAuthorizer);
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _kubeClient = kubeClient ?? throw new ArgumentNullException(nameof(kubeClient));
             _subAgentInvoker = subAgentInvoker;
             _namespace = kubernetesOptions?.Value.Namespace ?? "adapter";
         }
@@ -177,6 +180,15 @@ namespace Microsoft.McpGateway.Management.Foundry
             {
                 _logger.LogWarning("Caller lacks permission to invoke MCP tool {tool} at invocation time; denying.", tool.Name);
                 return new ToolResult(JsonSerializer.Serialize(new { error = "You do not have permission to invoke this tool." }), IsError: true);
+            }
+
+            try
+            {
+                await DeploymentOwnership.VerifyServiceAsync(_kubeClient, current.Name, ResourceType.Tool, _namespace, cancellationToken).ConfigureAwait(false);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return new ToolResult(JsonSerializer.Serialize(new { error = "The deployment does not belong to this tool." }), IsError: true);
             }
 
             var def = current.ToolDefinition;

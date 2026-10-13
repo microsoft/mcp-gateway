@@ -11,9 +11,11 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using k8s.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Contracts;
+using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Foundry;
 using Microsoft.McpGateway.Management.Store;
 using ModelContextProtocol.Protocol;
@@ -37,6 +39,7 @@ namespace Microsoft.McpGateway.Management.Tests
         private readonly Mock<IPermissionProvider> _permission = new();
         private readonly Mock<IBuiltinToolAuthorizer> _builtinAuthorizer = new();
         private readonly Mock<ILogger<AgentToolRegistry>> _logger = new();
+        private readonly Mock<IKubeClientWrapper> _kubeClient = new();
         private readonly SubAgentInvoker _subAgentInvoker;
         private readonly AgentToolRegistry _registry;
         private int _runnerFactoryCalls;
@@ -58,6 +61,7 @@ namespace Microsoft.McpGateway.Management.Tests
                 _permission.Object,
                 _builtinAuthorizer.Object,
                 _logger.Object,
+                _kubeClient.Object,
                 _subAgentInvoker,
                 builtinExecutor: null);
         }
@@ -76,6 +80,7 @@ namespace Microsoft.McpGateway.Management.Tests
                 _permission.Object,
                 authorizer.Object,
                 _logger.Object,
+                _kubeClient.Object,
                 _subAgentInvoker,
                 new BuiltinToolExecutor(Mock.Of<ILogger<BuiltinToolExecutor>>()));
         }
@@ -198,6 +203,11 @@ namespace Microsoft.McpGateway.Management.Tests
         public async Task ExecuteAsync_ShouldInvokeMcpTool_WhenCallerHasPermission()
         {
             var tool = CreateTool("finance-ledger-tool", "admin-poc", "finance-admin");
+            var labels = new Dictionary<string, string> { ["adapter/type"] = "tool", ["adapter/name"] = tool.Name };
+            _kubeClient.Setup(client => client.ReadStatefulSetAsync(tool.Name, "adapter", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new V1StatefulSet { Spec = new V1StatefulSetSpec { Selector = new V1LabelSelector { MatchLabels = labels } } });
+            _kubeClient.Setup(client => client.ReadServiceAsync($"{tool.Name}-service", "adapter", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new V1Service { Spec = new V1ServiceSpec { Selector = labels } });
             _toolStore.Setup(s => s.TryGetAsync("finance-ledger-tool", It.IsAny<CancellationToken>())).ReturnsAsync(tool);
             _permission.Setup(p => p.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<IManagedResource>(), Operation.Read)).ReturnsAsync(true);
             var handler = new StubHandler(HttpStatusCode.OK, "{\"ok\":true}");
@@ -214,6 +224,24 @@ namespace Microsoft.McpGateway.Management.Tests
             result.IsError.Should().BeFalse();
             result.Content.Should().Contain("ok");
             handler.Calls.Should().Be(1);
+        }
+
+        [TestMethod]
+        public async Task ExecuteAsync_ShouldDenyCollidedTool_BeforeSendingHttp()
+        {
+            var tool = CreateTool("collided-tool", "other-user");
+            _toolStore.Setup(store => store.TryGetAsync(tool.Name, It.IsAny<CancellationToken>())).ReturnsAsync(tool);
+            _permission.Setup(permission => permission.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), tool, Operation.Read)).ReturnsAsync(true);
+            _kubeClient.Setup(client => client.ReadStatefulSetAsync(tool.Name, "adapter", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new V1StatefulSet { Spec = new V1StatefulSetSpec { Selector = new V1LabelSelector {
+                    MatchLabels = new Dictionary<string, string> { ["adapter/type"] = "mcp", ["adapter/name"] = tool.Name }
+                } } });
+
+            var result = await _registry.ExecuteAsync(new McpResolvedTool(tool.Name, tool), "{}", "session", null,
+                Caller("other-user"), CancellationToken.None);
+
+            result.IsError.Should().BeTrue();
+            _httpFactory.Verify(factory => factory.CreateClient(It.IsAny<string>()), Times.Never);
         }
 
         [TestMethod]

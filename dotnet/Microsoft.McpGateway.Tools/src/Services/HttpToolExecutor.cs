@@ -28,6 +28,7 @@ namespace Microsoft.McpGateway.Tools.Services
         IPermissionProvider permissionProvider,
         IHttpContextAccessor httpContextAccessor,
         ILogger<HttpToolExecutor> logger,
+        IKubeClientWrapper kubeClient,
         IOptions<GatewayKubernetesOptions>? kubernetesOptions = null) : IToolExecutor
     {
         private readonly IHttpClientFactory httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
@@ -36,6 +37,7 @@ namespace Microsoft.McpGateway.Tools.Services
         private readonly IToolResourceStore toolResourceStore = toolResourceStore ?? throw new ArgumentNullException(nameof(toolResourceStore));
         private readonly IPermissionProvider permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
         private readonly IHttpContextAccessor httpContextAccessor = httpContextAccessor ?? throw new ArgumentNullException(nameof(httpContextAccessor));
+        private readonly IKubeClientWrapper kubeClient = kubeClient ?? throw new ArgumentNullException(nameof(kubeClient));
 
         /// <inheritdoc/>
         public async ValueTask<CallToolResult> ExecuteToolAsync(
@@ -93,6 +95,9 @@ namespace Microsoft.McpGateway.Tools.Services
                     McpToolHeaderValidator.Validate(toolDefinition.Tool.InputSchema, requestContext.Params?.Arguments, httpContext.Request.Headers);
 
                 _ = await this.toolDefinitionProvider.GetToolDefinitionAsync(toolName, cancellationToken).ConfigureAwait(false);
+
+                await DeploymentOwnership.VerifyServiceAsync(this.kubeClient, toolName, ResourceType.Tool,
+                    kubernetesOptions?.Value.Namespace ?? "adapter", cancellationToken).ConfigureAwait(false);
 
                 // Compose the execution endpoint URL using UriBuilder. Building the URI from
                 // discrete components (rather than string-interpolating the configured path)

@@ -4,7 +4,10 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Options;
 using Microsoft.McpGateway.Management.Authorization;
+using Microsoft.McpGateway.Management.Contracts;
+using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Extensions;
 using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Service.Routing;
@@ -18,7 +21,9 @@ namespace Microsoft.McpGateway.Service.Controllers
         IServiceNodeInfoProvider serviceNodeInfoProvider,
         IAdapterResourceStore adapterResourceStore,
         IPermissionProvider permissionProvider,
-        ILogger<AdapterReverseProxyController> logger) : ControllerBase
+        ILogger<AdapterReverseProxyController> logger,
+        IKubeClientWrapper kubeClient,
+        IOptions<GatewayKubernetesOptions>? kubernetesOptions = null) : ControllerBase
     {
         private const string ToolGateway = "toolgateway";
         private readonly IHttpClientFactory httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
@@ -26,6 +31,7 @@ namespace Microsoft.McpGateway.Service.Controllers
         private readonly IAdapterResourceStore adapterResourceStore = adapterResourceStore ?? throw new ArgumentNullException(nameof(adapterResourceStore));
         private readonly IPermissionProvider permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
         private readonly ILogger<AdapterReverseProxyController> logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        private readonly IKubeClientWrapper kubeClient = kubeClient ?? throw new ArgumentNullException(nameof(kubeClient));
 
         /// <summary>
         /// Support for MCP streamable HTTP connection.
@@ -74,6 +80,17 @@ namespace Microsoft.McpGateway.Service.Controllers
             if (!await permissionProvider.CheckAccessAsync(HttpContext.User, adapter, Operation.Read).ConfigureAwait(false))
             {
                 logger.LogWarning("User {userId} denied read access for adapter {adapterName} via proxy.", HttpContext.User?.Identity?.Name?.Sanitize(), name.Sanitize());
+                HttpContext.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return false;
+            }
+
+            try
+            {
+                await DeploymentOwnership.VerifyServiceAsync(kubeClient, adapter.Name, ResourceType.Mcp,
+                    kubernetesOptions?.Value.Namespace ?? "adapter", cancellationToken).ConfigureAwait(false);
+            }
+            catch (UnauthorizedAccessException)
+            {
                 HttpContext.Response.StatusCode = StatusCodes.Status403Forbidden;
                 return false;
             }

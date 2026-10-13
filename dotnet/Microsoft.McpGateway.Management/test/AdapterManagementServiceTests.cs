@@ -12,6 +12,7 @@ using Microsoft.McpGateway.Management.Contracts;
 using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Service;
 using Microsoft.McpGateway.Management.Store;
+using ModelContextProtocol.Protocol;
 using Moq;
 
 namespace Microsoft.McpGateway.Management.Tests
@@ -21,6 +22,7 @@ namespace Microsoft.McpGateway.Management.Tests
     {
         private readonly Mock<IAdapterDeploymentManager> _deploymentManagerMock;
         private readonly Mock<IAdapterResourceStore> _storeMock;
+        private readonly Mock<IToolResourceStore> _toolStoreMock;
         private readonly Mock<IPermissionProvider> _permissionProviderMock;
         private readonly Mock<IWorkloadIdentityAuthorizer> _workloadIdentityAuthorizerMock;
         private readonly Mock<ILogger<AdapterManagementService>> _loggerMock;
@@ -31,6 +33,7 @@ namespace Microsoft.McpGateway.Management.Tests
         {
             _deploymentManagerMock = new Mock<IAdapterDeploymentManager>();
             _storeMock = new Mock<IAdapterResourceStore>();
+            _toolStoreMock = new Mock<IToolResourceStore>();
             _permissionProviderMock = new Mock<IPermissionProvider>();
             _workloadIdentityAuthorizerMock = new Mock<IWorkloadIdentityAuthorizer>();
             _loggerMock = new Mock<ILogger<AdapterManagementService>>();
@@ -41,7 +44,7 @@ namespace Microsoft.McpGateway.Management.Tests
             _permissionProviderMock.Setup(x => x.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<IEnumerable<AdapterResource>>(), Operation.Read))
                 .ReturnsAsync((ClaimsPrincipal _, IEnumerable<AdapterResource> resources, Operation _) => resources.ToArray());
             _workloadIdentityAuthorizerMock.Setup(x => x.IsAuthorized(It.IsAny<ClaimsPrincipal>())).Returns(true);
-            _service = new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, _permissionProviderMock.Object, _workloadIdentityAuthorizerMock.Object, _loggerMock.Object);
+            _service = new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, _toolStoreMock.Object, _permissionProviderMock.Object, _workloadIdentityAuthorizerMock.Object, _loggerMock.Object);
             _accessContext = new ClaimsPrincipal(new ClaimsIdentity([new(ClaimTypes.NameIdentifier, "user1")]));
         }
 
@@ -80,6 +83,56 @@ namespace Microsoft.McpGateway.Management.Tests
 
             await act.Should().ThrowAsync<ArgumentException>()
                 .WithMessage("The adapter with the same name already exist.");
+        }
+
+        [TestMethod]
+        public async Task CreateAsync_ShouldThrowArgumentException_WhenToolWithSameNameExists()
+        {
+            var request = new AdapterData { Name = "shared-name", ImageName = "image", ImageVersion = "v1" };
+            var tool = new ToolResource
+            {
+                Id = "shared-name",
+                Name = "shared-name",
+                ImageName = "image",
+                ImageVersion = "v1",
+                CreatedBy = "user2",
+                ToolDefinition = new ToolDefinition { Tool = new Tool { Name = "shared-name" } }
+            };
+            _toolStoreMock.Setup(x => x.TryGetAsync("shared-name", It.IsAny<CancellationToken>())).ReturnsAsync(tool);
+
+            Func<Task> act = () => _service.CreateAsync(_accessContext, request, CancellationToken.None);
+
+            await act.Should().ThrowAsync<ArgumentException>()
+                .WithMessage("A tool with the same name already exists. Adapter and tool names must be unique.");
+            _deploymentManagerMock.Verify(x => x.CreateDeploymentAsync(It.IsAny<AdapterData>(), It.IsAny<ResourceType>(), It.IsAny<CancellationToken>()), Times.Never);
+            _storeMock.Verify(x => x.UpsertAsync(It.IsAny<AdapterResource>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [TestMethod]
+        public async Task CreateAsync_ShouldNotStoreAdapter_WhenDeploymentIsRefused()
+        {
+            var request = new AdapterData { Name = "adapter1", ImageName = "image", ImageVersion = "v1" };
+            _deploymentManagerMock.Setup(x => x.CreateDeploymentAsync(It.IsAny<AdapterData>(), ResourceType.Mcp, It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new ArgumentException("A Kubernetes resource with the same name already exists."));
+
+            Func<Task> act = () => _service.CreateAsync(_accessContext, request, CancellationToken.None);
+
+            await act.Should().ThrowAsync<ArgumentException>();
+            _storeMock.Verify(x => x.UpsertAsync(It.IsAny<AdapterResource>(), It.IsAny<CancellationToken>()), Times.Never);
+            _deploymentManagerMock.Verify(x => x.DeleteDeploymentAsync(It.IsAny<string>(), It.IsAny<ResourceType>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [TestMethod]
+        public async Task CreateAsync_ShouldRetainReservation_WhenStorageOutcomeIsUnknown()
+        {
+            var request = new AdapterData { Name = "adapter1", ImageName = "image", ImageVersion = "v1" };
+            _storeMock.Setup(x => x.UpsertAsync(It.IsAny<AdapterResource>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new InvalidOperationException("store unavailable"));
+
+            Func<Task> act = () => _service.CreateAsync(_accessContext, request, CancellationToken.None);
+
+            await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("store unavailable");
+            _deploymentManagerMock.Verify(x => x.DeleteDeploymentAsync("adapter1", ResourceType.Mcp, It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [TestMethod]
@@ -285,7 +338,21 @@ namespace Microsoft.McpGateway.Management.Tests
             await _service.DeleteAsync(_accessContext, "adapter1", CancellationToken.None);
 
             _storeMock.Verify(x => x.DeleteAsync("adapter1", It.IsAny<CancellationToken>()), Times.Once);
-            _deploymentManagerMock.Verify(x => x.DeleteDeploymentAsync("adapter1", It.IsAny<CancellationToken>()), Times.Once);
+            _deploymentManagerMock.Verify(x => x.DeleteDeploymentAsync("adapter1", ResourceType.Mcp, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [TestMethod]
+        public async Task DeleteAsync_ShouldKeepRecord_WhenDeploymentDeletionFails()
+        {
+            var existing = AdapterResource.Create(new AdapterData { Name = "adapter1", ImageName = "image", ImageVersion = "v1" }, "user1", DateTimeOffset.UtcNow);
+            _storeMock.Setup(x => x.TryGetAsync("adapter1", It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+            _deploymentManagerMock.Setup(x => x.DeleteDeploymentAsync("adapter1", ResourceType.Mcp, It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new InvalidOperationException("cluster unavailable"));
+
+            Func<Task> act = () => _service.DeleteAsync(_accessContext, "adapter1", CancellationToken.None);
+
+            await act.Should().ThrowAsync<InvalidOperationException>();
+            _storeMock.Verify(x => x.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         [TestMethod]
@@ -373,7 +440,7 @@ namespace Microsoft.McpGateway.Management.Tests
         [TestMethod]
         public void Constructor_ShouldThrowArgumentNullException_WhenDeploymentManagerIsNull()
         {
-            var act = () => new AdapterManagementService(null!, _storeMock.Object, _permissionProviderMock.Object, _workloadIdentityAuthorizerMock.Object, _loggerMock.Object);
+            var act = () => new AdapterManagementService(null!, _storeMock.Object, _toolStoreMock.Object, _permissionProviderMock.Object, _workloadIdentityAuthorizerMock.Object, _loggerMock.Object);
 
             act.Should().Throw<ArgumentNullException>().WithParameterName("adapterDeploymentManager");
         }
@@ -381,15 +448,23 @@ namespace Microsoft.McpGateway.Management.Tests
         [TestMethod]
         public void Constructor_ShouldThrowArgumentNullException_WhenStoreIsNull()
         {
-            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, null!, _permissionProviderMock.Object, _workloadIdentityAuthorizerMock.Object, _loggerMock.Object);
+            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, null!, _toolStoreMock.Object, _permissionProviderMock.Object, _workloadIdentityAuthorizerMock.Object, _loggerMock.Object);
 
             act.Should().Throw<ArgumentNullException>().WithParameterName("store");
         }
 
         [TestMethod]
+        public void Constructor_ShouldThrowArgumentNullException_WhenToolStoreIsNull()
+        {
+            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, null!, _permissionProviderMock.Object, _workloadIdentityAuthorizerMock.Object, _loggerMock.Object);
+
+            act.Should().Throw<ArgumentNullException>().WithParameterName("toolStore");
+        }
+
+        [TestMethod]
         public void Constructor_ShouldThrowArgumentNullException_WhenPermissionProviderIsNull()
         {
-            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, null!, _workloadIdentityAuthorizerMock.Object, _loggerMock.Object);
+            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, _toolStoreMock.Object, null!, _workloadIdentityAuthorizerMock.Object, _loggerMock.Object);
 
             act.Should().Throw<ArgumentNullException>().WithParameterName("permissionProvider");
         }
@@ -397,7 +472,7 @@ namespace Microsoft.McpGateway.Management.Tests
         [TestMethod]
         public void Constructor_ShouldThrowArgumentNullException_WhenWorkloadIdentityAuthorizerIsNull()
         {
-            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, _permissionProviderMock.Object, null!, _loggerMock.Object);
+            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, _toolStoreMock.Object, _permissionProviderMock.Object, null!, _loggerMock.Object);
 
             act.Should().Throw<ArgumentNullException>().WithParameterName("workloadIdentityAuthorizer");
         }
@@ -405,7 +480,7 @@ namespace Microsoft.McpGateway.Management.Tests
         [TestMethod]
         public void Constructor_ShouldThrowArgumentNullException_WhenLoggerIsNull()
         {
-            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, _permissionProviderMock.Object, _workloadIdentityAuthorizerMock.Object, null!);
+            var act = () => new AdapterManagementService(_deploymentManagerMock.Object, _storeMock.Object, _toolStoreMock.Object, _permissionProviderMock.Object, _workloadIdentityAuthorizerMock.Object, null!);
 
             act.Should().Throw<ArgumentNullException>().WithParameterName("logger");
         }

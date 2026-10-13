@@ -12,11 +12,12 @@ using Microsoft.McpGateway.Management.Store;
 
 namespace Microsoft.McpGateway.Management.Service
 {
-    public class AdapterManagementService(IAdapterDeploymentManager adapterDeploymentManager, IAdapterResourceStore store, IPermissionProvider permissionProvider, IWorkloadIdentityAuthorizer workloadIdentityAuthorizer, ILogger<AdapterManagementService> logger) : IAdapterManagementService
+    public class AdapterManagementService(IAdapterDeploymentManager adapterDeploymentManager, IAdapterResourceStore store, IToolResourceStore toolStore, IPermissionProvider permissionProvider, IWorkloadIdentityAuthorizer workloadIdentityAuthorizer, ILogger<AdapterManagementService> logger) : IAdapterManagementService
     {
         private const string NamePattern = "^[a-z0-9-]+$";
         private readonly IAdapterDeploymentManager _deploymentManager = adapterDeploymentManager ?? throw new ArgumentNullException(nameof(adapterDeploymentManager));
         private readonly IAdapterResourceStore _store = store ?? throw new ArgumentNullException(nameof(store));
+        private readonly IToolResourceStore _toolStore = toolStore ?? throw new ArgumentNullException(nameof(toolStore));
         private readonly IPermissionProvider _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
         private readonly IWorkloadIdentityAuthorizer _workloadIdentityAuthorizer = workloadIdentityAuthorizer ?? throw new ArgumentNullException(nameof(workloadIdentityAuthorizer));
         private readonly ILogger _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -38,6 +39,13 @@ namespace Microsoft.McpGateway.Management.Service
                 throw new ArgumentException("The adapter with the same name already exist.");
             }
 
+            // Adapters and tools share one Kubernetes namespace, so their names must be unique across both stores.
+            if (await _toolStore.TryGetAsync(request.Name, cancellationToken).ConfigureAwait(false) != null)
+            {
+                logger.LogWarning("/adapters/{name} conflicts with an existing tool.", request.Name.Sanitize());
+                throw new ArgumentException("A tool with the same name already exists. Adapter and tool names must be unique.");
+            }
+
             var userId = accessContext.GetUserId()!;
             var adapter = AdapterResource.Create(request, userId, DateTimeOffset.UtcNow);
 
@@ -47,7 +55,16 @@ namespace Microsoft.McpGateway.Management.Service
             await _deploymentManager.CreateDeploymentAsync(request, ResourceType.Mcp, cancellationToken).ConfigureAwait(false);
 
             logger.LogInformation("Start update internal storage for /adapters/{name}.", request.Name.Sanitize());
-            await _store.UpsertAsync(adapter, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _store.UpsertAsync(adapter, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Storage outcome is unknown for /adapters/{name}; retaining its deployment reservation.", request.Name.Sanitize());
+                throw;
+            }
+
             return adapter;
         }
 
@@ -119,11 +136,12 @@ namespace Microsoft.McpGateway.Management.Service
 
             await EnsureAccessAsync(accessContext, existing, Operation.Write).ConfigureAwait(false);
 
+            // Remove the workload first so a failed delete leaves a record the owner can retry with.
+            logger.LogInformation("Start deleting Kubernetes deployment for /adapters/{name}.", name.Sanitize());
+            await _deploymentManager.DeleteDeploymentAsync(name, ResourceType.Mcp, cancellationToken).ConfigureAwait(false);
+
             logger.LogInformation("Start deleting storage record for /adapters/{name}.", name.Sanitize());
             await _store.DeleteAsync(name, cancellationToken).ConfigureAwait(false);
-
-            logger.LogInformation("Start deleting Kubernetes deployment for /adapters/{name}.", name.Sanitize());
-            await _deploymentManager.DeleteDeploymentAsync(name, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<IEnumerable<AdapterResource>> ListAsync(ClaimsPrincipal accessContext, CancellationToken cancellationToken)

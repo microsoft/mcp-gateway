@@ -67,7 +67,7 @@ namespace Microsoft.McpGateway.Service.Controllers
                 if (tool == null)
                     return NotFound();
                 else
-                    return Ok(await _adapterRichResultProvider.GetAdapterStatusAsync(tool.Name, cancellationToken).ConfigureAwait(false));
+                    return Ok(await _adapterRichResultProvider.GetAdapterStatusAsync(tool.Name, ResourceType.Tool, cancellationToken).ConfigureAwait(false));
             }
             catch (UnauthorizedAccessException)
             {
@@ -85,7 +85,7 @@ namespace Microsoft.McpGateway.Service.Controllers
                 if (tool == null)
                     return NotFound();
                 else
-                    return Ok(await _adapterRichResultProvider.GetAdapterLogsAsync(tool.Name, instance, cancellationToken).ConfigureAwait(false));
+                    return Ok(await _adapterRichResultProvider.GetAdapterLogsAsync(tool.Name, ResourceType.Tool, instance, cancellationToken).ConfigureAwait(false));
             }
             catch (UnauthorizedAccessException)
             {

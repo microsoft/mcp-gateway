@@ -29,6 +29,7 @@ namespace Microsoft.McpGateway.Management.Service
 
         private readonly IAdapterDeploymentManager _deploymentManager;
         private readonly IToolResourceStore _store;
+        private readonly IAdapterResourceStore _adapterStore;
         private readonly IPermissionProvider _permissionProvider;
         private readonly IWorkloadIdentityAuthorizer _workloadIdentityAuthorizer;
         private readonly ILogger _logger;
@@ -36,12 +37,14 @@ namespace Microsoft.McpGateway.Management.Service
         public ToolManagementService(
             IAdapterDeploymentManager adapterDeploymentManager,
             IToolResourceStore store,
+            IAdapterResourceStore adapterStore,
             IPermissionProvider permissionProvider,
             IWorkloadIdentityAuthorizer workloadIdentityAuthorizer,
             ILogger<ToolManagementService> logger)
         {
             _deploymentManager = adapterDeploymentManager ?? throw new ArgumentNullException(nameof(adapterDeploymentManager));
             _store = store ?? throw new ArgumentNullException(nameof(store));
+            _adapterStore = adapterStore ?? throw new ArgumentNullException(nameof(adapterStore));
             _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
             _workloadIdentityAuthorizer = workloadIdentityAuthorizer ?? throw new ArgumentNullException(nameof(workloadIdentityAuthorizer));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -65,6 +68,13 @@ namespace Microsoft.McpGateway.Management.Service
                 throw new ArgumentException("The tool with the same name already exists.");
             }
 
+            // Adapters and tools share one Kubernetes namespace, so their names must be unique across both stores.
+            if (await _adapterStore.TryGetAsync(request.Name, cancellationToken).ConfigureAwait(false) != null)
+            {
+                _logger.LogWarning("/tools/{name} conflicts with an existing adapter.", request.Name.Sanitize());
+                throw new ArgumentException("An adapter with the same name already exists. Adapter and tool names must be unique.");
+            }
+
             var tool = ToolResource.Create(request, accessContext.GetUserId()!, DateTimeOffset.UtcNow);
 
             _logger.LogInformation("Start creating /tools/{name}.", request.Name.Sanitize());
@@ -76,7 +86,16 @@ namespace Microsoft.McpGateway.Management.Service
             await _deploymentManager.CreateDeploymentAsync(adapterData, ResourceType.Tool, cancellationToken).ConfigureAwait(false);
 
             _logger.LogInformation("Start update internal storage for /tools/{name}.", request.Name.Sanitize());
-            await _store.UpsertAsync(tool, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _store.UpsertAsync(tool, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Storage outcome is unknown for /tools/{name}; retaining its deployment reservation.", request.Name.Sanitize());
+                throw;
+            }
+
             return tool;
         }
 
@@ -152,11 +171,12 @@ namespace Microsoft.McpGateway.Management.Service
 
             await EnsureAccessAsync(accessContext, existing, Operation.Write).ConfigureAwait(false);
 
+            // Remove the workload first so a failed delete leaves a record the owner can retry with.
+            _logger.LogInformation("Start deleting Kubernetes deployment for /tools/{name}.", name.Sanitize());
+            await _deploymentManager.DeleteDeploymentAsync(name, ResourceType.Tool, cancellationToken).ConfigureAwait(false);
+
             _logger.LogInformation("Start deleting storage record for /tools/{name}.", name.Sanitize());
             await _store.DeleteAsync(name, cancellationToken).ConfigureAwait(false);
-
-            _logger.LogInformation("Start deleting Kubernetes deployment for /tools/{name}.", name.Sanitize());
-            await _deploymentManager.DeleteDeploymentAsync(name, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<IEnumerable<ToolResource>> ListAsync(ClaimsPrincipal accessContext, CancellationToken cancellationToken)

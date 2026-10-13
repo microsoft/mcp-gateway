@@ -3,6 +3,7 @@
 
 using Azure.Identity;
 using Microsoft.Azure.Cosmos;
+using Microsoft.Extensions.Options;
 using Microsoft.McpGateway.Management;
 using Microsoft.McpGateway.Management.Store;
 using Microsoft.McpGateway.Management.Authorization;
@@ -20,6 +21,10 @@ var builder = WebApplication.CreateBuilder(args);
 // Add logging
 builder.Services.AddLogging();
 builder.Services.Configure<GatewayKubernetesOptions>(builder.Configuration.GetSection("Kubernetes"));
+builder.Services.AddSingleton<IKubernetesClientFactory, LocalKubernetesClientFactory>();
+builder.Services.AddSingleton<IKubeClientWrapper>(services => new KubeClient(
+    services.GetRequiredService<IKubernetesClientFactory>(),
+    services.GetRequiredService<IOptions<GatewayKubernetesOptions>>().Value.Namespace));
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
