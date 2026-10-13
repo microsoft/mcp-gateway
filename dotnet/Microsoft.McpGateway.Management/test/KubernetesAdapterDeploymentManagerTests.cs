@@ -18,6 +18,8 @@ namespace Microsoft.McpGateway.Management.Tests
         private readonly Mock<IKubeClientWrapper> _kubeClientMock;
         private readonly Mock<ILogger<KubernetesAdapterDeploymentManager>> _loggerMock;
         private readonly KubernetesAdapterDeploymentManager _manager;
+        private V1StatefulSet? _persistedStatefulSet;
+        private V1Service? _persistedService;
 
         public KubernetesAdapterDeploymentManagerTests()
         {
@@ -26,8 +28,18 @@ namespace Microsoft.McpGateway.Management.Tests
                 .ReturnsAsync((V1StatefulSet statefulSet, string namespaceName, CancellationToken cancellationToken) =>
                 {
                     statefulSet.Metadata.Uid = "created-uid";
-                    return statefulSet;
+                    return _persistedStatefulSet = statefulSet;
                 });
+            _kubeClientMock.Setup(client => client.UpsertServiceAsync(It.IsAny<V1Service>(), "adapter", It.IsAny<CancellationToken>()))
+                .ReturnsAsync((V1Service service, string namespaceName, CancellationToken cancellationToken) =>
+                {
+                    service.Metadata.Uid = "created-service-uid";
+                    return _persistedService = service;
+                });
+            _kubeClientMock.Setup(client => client.ReadStatefulSetAsync(It.IsAny<string>(), "adapter", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(() => _persistedStatefulSet ?? throw HttpError(HttpStatusCode.NotFound));
+            _kubeClientMock.Setup(client => client.ReadServiceAsync(It.IsAny<string>(), "adapter", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(() => _persistedService ?? throw HttpError(HttpStatusCode.NotFound));
             _loggerMock = new Mock<ILogger<KubernetesAdapterDeploymentManager>>();
             _manager = new KubernetesAdapterDeploymentManager("registry.io", _kubeClientMock.Object, _loggerMock.Object);
         }
@@ -356,6 +368,58 @@ namespace Microsoft.McpGateway.Management.Tests
             Func<Task> act = () => _manager.CreateDeploymentAsync(request, ResourceType.Mcp, CancellationToken.None);
 
             await act.Should().ThrowAsync<HttpOperationException>();
+            _kubeClientMock.Verify(x => x.DeleteStatefulSetAsync("adapter1", "created-uid", "adapter", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [TestMethod]
+        public async Task CreateDeploymentAsync_WhenStatefulSetConflictsWithForeignObject_ShouldNotDeleteIt()
+        {
+            var request = new AdapterData { Name = "adapter1", ImageName = "image", ImageVersion = "v1" };
+            _persistedStatefulSet = OwnedStatefulSet("adapter1", "tool");
+            _kubeClientMock.Setup(x => x.UpsertStatefulSetAsync(It.IsAny<V1StatefulSet>(), "adapter", It.IsAny<CancellationToken>()))
+                .ThrowsAsync(HttpError(HttpStatusCode.Conflict));
+
+            Func<Task> act = () => _manager.CreateDeploymentAsync(request, ResourceType.Mcp, CancellationToken.None);
+
+            await act.Should().ThrowAsync<ArgumentException>();
+            _kubeClientMock.Verify(x => x.DeleteStatefulSetAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [TestMethod]
+        public async Task CreateDeploymentAsync_WhenStatefulSetResponseIsLost_ShouldRemovePersistedStatefulSet()
+        {
+            var request = new AdapterData { Name = "adapter1", ImageName = "image", ImageVersion = "v1" };
+            _kubeClientMock.Setup(x => x.UpsertStatefulSetAsync(It.IsAny<V1StatefulSet>(), "adapter", It.IsAny<CancellationToken>()))
+                .Callback<V1StatefulSet, string, CancellationToken>((statefulSet, ns, ct) =>
+                {
+                    statefulSet.Metadata.Uid = "persisted-uid";
+                    _persistedStatefulSet = statefulSet;
+                })
+                .ThrowsAsync(new TaskCanceledException("timeout"));
+
+            Func<Task> act = () => _manager.CreateDeploymentAsync(request, ResourceType.Mcp, CancellationToken.None);
+
+            await act.Should().ThrowAsync<TaskCanceledException>();
+            _kubeClientMock.Verify(x => x.DeleteStatefulSetAsync("adapter1", "persisted-uid", "adapter", It.IsAny<CancellationToken>()), Times.Once);
+            _kubeClientMock.Verify(x => x.UpsertServiceAsync(It.IsAny<V1Service>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [TestMethod]
+        public async Task CreateDeploymentAsync_WhenServiceResponseIsLost_ShouldRemoveBothPersistedObjects()
+        {
+            var request = new AdapterData { Name = "adapter1", ImageName = "image", ImageVersion = "v1" };
+            _kubeClientMock.Setup(x => x.UpsertServiceAsync(It.IsAny<V1Service>(), "adapter", It.IsAny<CancellationToken>()))
+                .Callback<V1Service, string, CancellationToken>((service, ns, ct) =>
+                {
+                    service.Metadata.Uid = "persisted-service-uid";
+                    _persistedService = service;
+                })
+                .ThrowsAsync(new HttpRequestException("connection reset"));
+
+            Func<Task> act = () => _manager.CreateDeploymentAsync(request, ResourceType.Mcp, CancellationToken.None);
+
+            await act.Should().ThrowAsync<HttpRequestException>();
+            _kubeClientMock.Verify(x => x.DeleteServiceAsync("adapter1-service", "persisted-service-uid", "adapter", It.IsAny<CancellationToken>()), Times.Once);
             _kubeClientMock.Verify(x => x.DeleteStatefulSetAsync("adapter1", "created-uid", "adapter", It.IsAny<CancellationToken>()), Times.Once);
         }
 

@@ -11,7 +11,7 @@ namespace Microsoft.McpGateway.Management.Deployment
     public interface IAdapterDeploymentManager
     {
         /// <summary>
-        /// Creates a new deployment asynchronously. Fails when any resource with the same name already exists.
+        /// Creates a new deployment asynchronously. Fails when a StatefulSet or Service with the generated name already exists.
         /// </summary>
         /// <param name="request">The data for the adapter deployment.</param>
         /// <param name="resourceType">The type of resource being deployed (Adapter or Tool).</param>

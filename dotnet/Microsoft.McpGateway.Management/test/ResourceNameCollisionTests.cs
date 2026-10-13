@@ -146,6 +146,16 @@ namespace Microsoft.McpGateway.Management.Tests
         [DataTestMethod]
         [DataRow(ResourceType.Mcp)]
         [DataRow(ResourceType.Tool)]
+        public async Task Routing_RejectsAMissingWorkload(ResourceType resourceType)
+        {
+            Func<Task> act = () => DeploymentOwnership.VerifyServiceAsync(_cluster, SharedName, resourceType, "adapter", CancellationToken.None);
+
+            await act.Should().ThrowAsync<UnauthorizedAccessException>();
+        }
+
+        [DataTestMethod]
+        [DataRow(ResourceType.Mcp)]
+        [DataRow(ResourceType.Tool)]
         public async Task Routing_AllowsMatchingWorkloadAndService(ResourceType resourceType)
         {
             await _deploymentManager.CreateDeploymentAsync(AdapterRequest(SharedName), resourceType, CancellationToken.None);

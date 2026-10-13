@@ -18,6 +18,7 @@ namespace Microsoft.McpGateway.Management.Deployment
         private const string AdapterNamespace = "adapter";
         private const string TypeLabel = $"{AdapterNamespace}/type";
         private const string NameLabel = $"{AdapterNamespace}/name";
+        private const string CreationAttemptAnnotation = $"{AdapterNamespace}/creation-attempt";
         // Name of the first-party tool gateway StatefulSet.
         private const string ToolGatewayName = "toolgateway";
         private const string NameInUseMessage = "A Kubernetes resource with the same name already exists.";
@@ -52,10 +53,11 @@ namespace Microsoft.McpGateway.Management.Deployment
                 { NameLabel, request.Name },
                 { "azure.workload.identity/use", request.UseWorkloadIdentity.ToString().ToLowerInvariant() }
             };
+            var attemptId = Guid.NewGuid().ToString("N");
 
             var statefulSet = new V1StatefulSet
             {
-                Metadata = new V1ObjectMeta { Name = request.Name },
+                Metadata = new V1ObjectMeta { Name = request.Name, Annotations = new Dictionary<string, string> { [CreationAttemptAnnotation] = attemptId } },
                 Spec = new V1StatefulSetSpec
                 {
                     ServiceName = $"{request.Name}-service",
@@ -120,7 +122,8 @@ namespace Microsoft.McpGateway.Management.Deployment
             {
                 Metadata = new V1ObjectMeta
                 {
-                    Name = $"{request.Name}-service"
+                    Name = $"{request.Name}-service",
+                    Annotations = new Dictionary<string, string> { [CreationAttemptAnnotation] = attemptId }
                 },
                 Spec = new V1ServiceSpec
                 {
@@ -141,43 +144,56 @@ namespace Microsoft.McpGateway.Management.Deployment
             _logger.LogInformation("Creating deployment for {name} with resource type {resourceType}.", request.Name.Sanitize(), resourceType.ToString().ToLowerInvariant());
 
             // Creation is the atomic name reservation: never adopt an existing object, which may belong to another owner or resource type.
-            V1StatefulSet createdStatefulSet;
             try
             {
-                createdStatefulSet = await _kubeClient.UpsertStatefulSetAsync(statefulSet, _namespace, cancellationToken).ConfigureAwait(false);
+                await _kubeClient.UpsertStatefulSetAsync(statefulSet, _namespace, cancellationToken).ConfigureAwait(false);
                 _logger.LogInformation("Submitted Kubernetes deployment for {name}.", request.Name.Sanitize());
-            }
-            catch (HttpOperationException ex) when (ex.Response?.StatusCode == HttpStatusCode.Conflict)
-            {
-                _logger.LogWarning("Kubernetes deployment for {name} already exists. Refusing to create.", request.Name.Sanitize());
-                throw new ArgumentException(NameInUseMessage);
-            }
-
-            try
-            {
                 await _kubeClient.UpsertServiceAsync(service, _namespace, cancellationToken).ConfigureAwait(false);
                 _logger.LogInformation("Submitted Kubernetes service for {name} with {serviceType} routing.", request.Name.Sanitize(), resourceType == ResourceType.Tool ? "stateless (ClusterIP)" : "stateful (headless)");
             }
             catch (Exception ex)
             {
-                try
-                {
-                    await _kubeClient.DeleteStatefulSetAsync(request.Name, RequireUid(createdStatefulSet?.Metadata), _namespace, CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception rollbackException)
-                {
-                    _logger.LogError(rollbackException, "Failed to roll back Kubernetes deployment for {name}.", request.Name.Sanitize());
-                }
+                await RemoveCreationAttemptAsync(request.Name, attemptId).ConfigureAwait(false);
 
                 if (ex is HttpOperationException { Response.StatusCode: HttpStatusCode.Conflict })
                 {
-                    _logger.LogWarning("Kubernetes service for {name} already exists. Refusing to create.", request.Name.Sanitize());
+                    _logger.LogWarning("Kubernetes resource for {name} already exists. Refusing to create.", request.Name.Sanitize());
                     throw new ArgumentException(NameInUseMessage);
                 }
 
                 throw;
             }
         }
+
+        // A failed or interrupted create may still have persisted objects; remove only those carrying this attempt's marker.
+        private async Task RemoveCreationAttemptAsync(string name, string attemptId)
+        {
+            try
+            {
+                var service = await IgnoreNotFoundAsync(() => _kubeClient.ReadServiceAsync($"{name}-service", _namespace, CancellationToken.None)).ConfigureAwait(false);
+                if (IsCreationAttempt(service?.Metadata, attemptId))
+                    await IgnoreNotFoundAsync(() => _kubeClient.DeleteServiceAsync($"{name}-service", service!.Metadata.Uid, _namespace, CancellationToken.None)).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to roll back Kubernetes service for {name}.", name.Sanitize());
+            }
+
+            try
+            {
+                var statefulSet = await IgnoreNotFoundAsync(() => _kubeClient.ReadStatefulSetAsync(name, _namespace, CancellationToken.None)).ConfigureAwait(false);
+                if (IsCreationAttempt(statefulSet?.Metadata, attemptId))
+                    await IgnoreNotFoundAsync(() => _kubeClient.DeleteStatefulSetAsync(name, statefulSet!.Metadata.Uid, _namespace, CancellationToken.None)).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to roll back Kubernetes deployment for {name}.", name.Sanitize());
+            }
+        }
+
+        private static bool IsCreationAttempt(V1ObjectMeta? metadata, string attemptId) =>
+            !string.IsNullOrEmpty(metadata?.Uid) &&
+            metadata.Annotations?.TryGetValue(CreationAttemptAnnotation, out var value) == true && value == attemptId;
 
         public async Task UpdateDeploymentAsync(AdapterData request, ResourceType resourceType, CancellationToken cancellationToken)
         {
