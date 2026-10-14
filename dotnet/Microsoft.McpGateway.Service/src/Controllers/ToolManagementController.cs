@@ -4,6 +4,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.McpGateway.Management.Contracts;
+using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Service;
 
 namespace Microsoft.McpGateway.Service.Controllers
@@ -28,6 +29,10 @@ namespace Microsoft.McpGateway.Service.Controllers
             {
                 var result = await _managementService.CreateAsync(HttpContext.User, request, cancellationToken).ConfigureAwait(false);
                 return CreatedAtAction(nameof(GetTool), new { name = result.Name }, result);
+            }
+            catch (DeploymentDeletionPendingException ex)
+            {
+                return Conflict(ex.Message);
             }
             catch (ArgumentException ex)
             {
@@ -67,7 +72,7 @@ namespace Microsoft.McpGateway.Service.Controllers
                 if (tool == null)
                     return NotFound();
                 else
-                    return Ok(await _adapterRichResultProvider.GetAdapterStatusAsync(tool.Name, cancellationToken).ConfigureAwait(false));
+                    return Ok(await _adapterRichResultProvider.GetAdapterStatusAsync(tool.Name, ResourceType.Tool, cancellationToken).ConfigureAwait(false));
             }
             catch (UnauthorizedAccessException)
             {
@@ -85,7 +90,7 @@ namespace Microsoft.McpGateway.Service.Controllers
                 if (tool == null)
                     return NotFound();
                 else
-                    return Ok(await _adapterRichResultProvider.GetAdapterLogsAsync(tool.Name, instance, cancellationToken).ConfigureAwait(false));
+                    return Ok(await _adapterRichResultProvider.GetAdapterLogsAsync(tool.Name, ResourceType.Tool, instance, cancellationToken).ConfigureAwait(false));
             }
             catch (UnauthorizedAccessException)
             {

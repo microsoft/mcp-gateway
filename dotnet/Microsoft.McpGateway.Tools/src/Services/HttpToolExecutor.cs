@@ -28,6 +28,7 @@ namespace Microsoft.McpGateway.Tools.Services
         IPermissionProvider permissionProvider,
         IHttpContextAccessor httpContextAccessor,
         ILogger<HttpToolExecutor> logger,
+        DeploymentOwnership deploymentOwnership,
         IOptions<GatewayKubernetesOptions>? kubernetesOptions = null) : IToolExecutor
     {
         private readonly IHttpClientFactory httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
@@ -36,6 +37,7 @@ namespace Microsoft.McpGateway.Tools.Services
         private readonly IToolResourceStore toolResourceStore = toolResourceStore ?? throw new ArgumentNullException(nameof(toolResourceStore));
         private readonly IPermissionProvider permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
         private readonly IHttpContextAccessor httpContextAccessor = httpContextAccessor ?? throw new ArgumentNullException(nameof(httpContextAccessor));
+        private readonly DeploymentOwnership deploymentOwnership = deploymentOwnership ?? throw new ArgumentNullException(nameof(deploymentOwnership));
 
         /// <inheritdoc/>
         public async ValueTask<CallToolResult> ExecuteToolAsync(
@@ -93,6 +95,16 @@ namespace Microsoft.McpGateway.Tools.Services
                     McpToolHeaderValidator.Validate(toolDefinition.Tool.InputSchema, requestContext.Params?.Arguments, httpContext.Request.Headers);
 
                 _ = await this.toolDefinitionProvider.GetToolDefinitionAsync(toolName, cancellationToken).ConfigureAwait(false);
+
+                try
+                {
+                    await this.deploymentOwnership.VerifyAsync(toolName, ResourceType.Tool, cancellationToken).ConfigureAwait(false);
+                }
+                catch (DeploymentOwnershipUnavailableException ex)
+                {
+                    this.logger.LogWarning(ex, "Could not verify deployment for tool {ToolName}", toolName);
+                    return CreateErrorResult($"Error: Tool '{toolName}' is temporarily unavailable. Retry shortly.");
+                }
 
                 // Compose the execution endpoint URL using UriBuilder. Building the URI from
                 // discrete components (rather than string-interpolating the configured path)

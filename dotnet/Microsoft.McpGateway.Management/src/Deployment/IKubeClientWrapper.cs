@@ -13,12 +13,12 @@ namespace Microsoft.McpGateway.Management.Deployment
         /// <summary>
         /// Deletes a Kubernetes Service by name.
         /// </summary>
-        Task<V1Service> DeleteServiceAsync(string name, string? ns = null, CancellationToken cancellationToken = default);
+        Task<V1Service> DeleteServiceAsync(string name, string uid, string? ns = null, CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Deletes a Kubernetes StatefulSet by name.
         /// </summary>
-        Task<V1Status> DeleteStatefulSetAsync(string name, string? ns = null, CancellationToken cancellationToken = default);
+        Task<V1Status> DeleteStatefulSetAsync(string name, string uid, string? ns = null, CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Retrieves a stream of logs from a container in a pod.
@@ -46,6 +46,11 @@ namespace Microsoft.McpGateway.Management.Deployment
         /// Reads a Kubernetes Pod by name.
         /// </summary>
         Task<V1Pod> ReadPodAsync(string name, string? ns = null, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Reads a Kubernetes Service by name.
+        /// </summary>
+        Task<V1Service> ReadServiceAsync(string name, string? ns = null, CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Reads a Kubernetes StatefulSet by name.

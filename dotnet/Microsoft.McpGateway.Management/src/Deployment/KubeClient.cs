@@ -59,16 +59,28 @@ namespace Microsoft.McpGateway.Management.Deployment
             return await kubeClient.CoreV1.ReadNamespacedPodAsync(name, ns ?? _defaultNamespace, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
 
-        public async Task<V1Status> DeleteStatefulSetAsync(string name, string? ns = null, CancellationToken cancellationToken = default)
+        public async Task<V1Service> ReadServiceAsync(string name, string? ns = null, CancellationToken cancellationToken = default)
         {
             var kubeClient = await _lazyClient.Value.ConfigureAwait(false);
-            return await kubeClient.AppsV1.DeleteNamespacedStatefulSetAsync(name, ns ?? _defaultNamespace, cancellationToken: cancellationToken).ConfigureAwait(false);
+            return await kubeClient.CoreV1.ReadNamespacedServiceAsync(name, ns ?? _defaultNamespace, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
 
-        public async Task<V1Service> DeleteServiceAsync(string name, string? ns = null, CancellationToken cancellationToken = default)
+        public async Task<V1Status> DeleteStatefulSetAsync(string name, string uid, string? ns = null, CancellationToken cancellationToken = default)
         {
+            ArgumentException.ThrowIfNullOrEmpty(uid);
             var kubeClient = await _lazyClient.Value.ConfigureAwait(false);
-            return await kubeClient.CoreV1.DeleteNamespacedServiceAsync(name, ns ?? _defaultNamespace, cancellationToken: cancellationToken).ConfigureAwait(false);
+            return await kubeClient.AppsV1.DeleteNamespacedStatefulSetAsync(name, ns ?? _defaultNamespace,
+                body: new V1DeleteOptions { Preconditions = new V1Preconditions { Uid = uid }, PropagationPolicy = "Foreground" },
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task<V1Service> DeleteServiceAsync(string name, string uid, string? ns = null, CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(uid);
+            var kubeClient = await _lazyClient.Value.ConfigureAwait(false);
+            return await kubeClient.CoreV1.DeleteNamespacedServiceAsync(name, ns ?? _defaultNamespace,
+                body: new V1DeleteOptions { Preconditions = new V1Preconditions { Uid = uid } },
+                cancellationToken: cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<Stream> GetContainerLogStream(string name, int tailLines = 1000, string? ns = null, CancellationToken cancellationToken = default)

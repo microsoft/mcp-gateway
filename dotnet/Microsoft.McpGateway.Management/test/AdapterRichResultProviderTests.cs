@@ -27,9 +27,9 @@ namespace Microsoft.McpGateway.Management.Tests
         [TestMethod]
         public async Task GetAdapterLogsAsync_ShouldReturnLogs()
         {
-            _deploymentManagerMock.Setup(x => x.GetDeploymentLogsAsync("adapter1", 0, It.IsAny<CancellationToken>())).ReturnsAsync("log-output");
+            _deploymentManagerMock.Setup(x => x.GetDeploymentLogsAsync("adapter1", ResourceType.Mcp, 0, It.IsAny<CancellationToken>())).ReturnsAsync("log-output");
 
-            var result = await _provider.GetAdapterLogsAsync("adapter1", 0, CancellationToken.None);
+            var result = await _provider.GetAdapterLogsAsync("adapter1", ResourceType.Mcp, 0, CancellationToken.None);
 
             result.Should().Be("log-output");
         }
@@ -38,9 +38,9 @@ namespace Microsoft.McpGateway.Management.Tests
         public async Task GetAdapterStatusAsync_ShouldReturnStatus()
         {
             var status = new AdapterStatus { ReplicaStatus = "Healthy" };
-            _deploymentManagerMock.Setup(x => x.GetDeploymentStatusAsync("adapter1", It.IsAny<CancellationToken>())).ReturnsAsync(status);
+            _deploymentManagerMock.Setup(x => x.GetDeploymentStatusAsync("adapter1", ResourceType.Mcp, It.IsAny<CancellationToken>())).ReturnsAsync(status);
 
-            var result = await _provider.GetAdapterStatusAsync("adapter1", CancellationToken.None);
+            var result = await _provider.GetAdapterStatusAsync("adapter1", ResourceType.Mcp, CancellationToken.None);
 
             result.Should().Be(status);
         }

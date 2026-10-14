@@ -89,6 +89,19 @@ The [local overlay](local/kustomization.yaml) uses namespace `mcp-modern-e2e`, a
 
 8. Open `http://localhost:18000/portal/`. Use development identity `e2e-owner` with role `mcp.admin` to inspect the fixtures, connect to an adapter, and run a tool. Synthetic development identities are for local tests only.
 
+9. Optionally run the resource isolation checks. They create and delete their own fixtures, and need a second port-forward to a different gateway pod for the concurrent-create cases:
+
+  ```powershell
+  $env:MCP_E2E_KUBECONFIG = "$HOME/.kube/config"
+  $env:MCP_E2E_CONTEXT = 'docker-desktop'
+  $env:MCP_SECOND_BASE_URL = 'http://localhost:18001'
+  node deployment/e2e/test-mcp.mjs isolation
+  ```
+
+Workload deletion is asynchronous. A same-name create can return `409` while the previous StatefulSet or Service is terminating; wait for deletion to complete before retrying. The fixture cleanup uses `kubectl wait --for=delete` for this reason.
+
+Routing ownership results are cached per process for up to 30 seconds (5 seconds for missing or mismatched resources). Create/delete operations invalidate the local entries; other replicas refresh when their entries expire. Resource access permissions are still checked on every request. When an uncached ownership lookup cannot reach Kubernetes, adapter proxy requests return `503` with `Retry-After: 5`, and tool calls return a retryable error.
+
 The test-only network policy permits just `e2e-proxy` to call `e2e-example` on port 8000. Record running pod `imageID` values when comparing builds. To clean up, delete only the dedicated namespace and registry after confirming they contain no work you need:
 
 ```powershell
