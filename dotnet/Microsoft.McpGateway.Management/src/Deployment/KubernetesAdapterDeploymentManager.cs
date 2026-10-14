@@ -29,8 +29,9 @@ namespace Microsoft.McpGateway.Management.Deployment
         private readonly string _containerRegistryAddress;
         private readonly ILogger<KubernetesAdapterDeploymentManager> _logger;
         private readonly string _namespace;
+        private readonly DeploymentOwnership? _ownership;
 
-        public KubernetesAdapterDeploymentManager(string containerRegistryAddress, IKubeClientWrapper kubeClient, ILogger<KubernetesAdapterDeploymentManager> logger, IOptions<GatewayKubernetesOptions>? options = null)
+        public KubernetesAdapterDeploymentManager(string containerRegistryAddress, IKubeClientWrapper kubeClient, ILogger<KubernetesAdapterDeploymentManager> logger, IOptions<GatewayKubernetesOptions>? options = null, DeploymentOwnership? ownership = null)
         {
             ArgumentException.ThrowIfNullOrEmpty(containerRegistryAddress);
 
@@ -38,6 +39,7 @@ namespace Microsoft.McpGateway.Management.Deployment
             _kubeClient = kubeClient ?? throw new ArgumentNullException(nameof(kubeClient));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _namespace = options?.Value.Namespace ?? "adapter";
+            _ownership = ownership;
         }
 
         public async Task CreateDeploymentAsync(AdapterData request, ResourceType resourceType, CancellationToken cancellationToken)
@@ -144,6 +146,7 @@ namespace Microsoft.McpGateway.Management.Deployment
             _logger.LogInformation("Creating deployment for {name} with resource type {resourceType}.", request.Name.Sanitize(), resourceType.ToString().ToLowerInvariant());
 
             // Creation is the atomic name reservation: never adopt an existing object, which may belong to another owner or resource type.
+            _ownership?.Invalidate(request.Name);
             try
             {
                 await _kubeClient.UpsertStatefulSetAsync(statefulSet, _namespace, cancellationToken).ConfigureAwait(false);
@@ -157,11 +160,33 @@ namespace Microsoft.McpGateway.Management.Deployment
 
                 if (ex is HttpOperationException { Response.StatusCode: HttpStatusCode.Conflict })
                 {
+                    if (await IsDeletionPendingAsync(request.Name).ConfigureAwait(false))
+                        throw new DeploymentDeletionPendingException("A previous deployment with the same name is still being deleted. Retry shortly.");
+
                     _logger.LogWarning("Kubernetes resource for {name} already exists. Refusing to create.", request.Name.Sanitize());
                     throw new ArgumentException(NameInUseMessage);
                 }
 
                 throw;
+            }
+            finally
+            {
+                _ownership?.Invalidate(request.Name);
+            }
+        }
+
+        private async Task<bool> IsDeletionPendingAsync(string name)
+        {
+            try
+            {
+                var statefulSet = await IgnoreNotFoundAsync(() => _kubeClient.ReadStatefulSetAsync(name, _namespace, CancellationToken.None)).ConfigureAwait(false);
+                var service = await IgnoreNotFoundAsync(() => _kubeClient.ReadServiceAsync($"{name}-service", _namespace, CancellationToken.None)).ConfigureAwait(false);
+                return statefulSet?.Metadata?.DeletionTimestamp != null || service?.Metadata?.DeletionTimestamp != null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not check deletion state for {name}.", name.Sanitize());
+                return false;
             }
         }
 
@@ -205,8 +230,7 @@ namespace Microsoft.McpGateway.Management.Deployment
             {
                 metadata = new
                 {
-                    uid = RequireUid(statefulSet.Metadata),
-                    resourceVersion = statefulSet.Metadata.ResourceVersion
+                    uid = RequireUid(statefulSet.Metadata)
                 },
                 spec = new
                 {
@@ -246,6 +270,7 @@ namespace Microsoft.McpGateway.Management.Deployment
 
         public async Task DeleteDeploymentAsync(string name, ResourceType resourceType, CancellationToken cancellationToken)
         {
+            _ownership?.Invalidate(name);
             _logger.LogInformation("Deleting deployment for {name}.", name.Sanitize());
 
             var statefulSet = await IgnoreNotFoundAsync(() => _kubeClient.ReadStatefulSetAsync(name, _namespace, cancellationToken)).ConfigureAwait(false);
@@ -278,6 +303,7 @@ namespace Microsoft.McpGateway.Management.Deployment
             {
                 _logger.LogWarning("Skipped deleting service for {name}: it does not belong to the {resourceType} resource.", name.Sanitize(), ToLabelValue(resourceType));
             }
+            _ownership?.Invalidate(name);
         }
 
         public async Task<AdapterStatus> GetDeploymentStatusAsync(string name, ResourceType resourceType, CancellationToken cancellationToken)

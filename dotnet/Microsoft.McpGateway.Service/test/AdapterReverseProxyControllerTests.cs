@@ -43,7 +43,7 @@ public class AdapterReverseProxyControllerTests
         context.Response.Body = new MemoryStream();
         var controller = new AdapterReverseProxyController(factory.Object, nodes.Object,
             Mock.Of<IAdapterResourceStore>(), Mock.Of<IPermissionProvider>(),
-            NullLogger<AdapterReverseProxyController>.Instance, Mock.Of<IKubeClientWrapper>())
+            NullLogger<AdapterReverseProxyController>.Instance, new DeploymentOwnership(Mock.Of<IKubeClientWrapper>()))
         {
             ControllerContext = new ControllerContext { HttpContext = context }
         };
@@ -56,6 +56,32 @@ public class AdapterReverseProxyControllerTests
         Assert.AreEqual("?application=value", handler.RequestQuery);
         Assert.IsFalse(context.Response.Headers.ContainsKey("Mcp-Session-Id"));
         nodes.VerifyAll();
+    }
+
+    [TestMethod]
+    public async Task Forward_ReturnsRetryable503_WhenOwnershipCannotBeVerified()
+    {
+        var adapter = Microsoft.McpGateway.Management.Contracts.AdapterResource.Create(
+            new Microsoft.McpGateway.Management.Contracts.AdapterData { Name = "adapter1", ImageName = "image", ImageVersion = "v1" }, "user1", DateTimeOffset.UtcNow);
+        var store = new Mock<IAdapterResourceStore>();
+        store.Setup(value => value.TryGetAsync("adapter1", It.IsAny<CancellationToken>())).ReturnsAsync(adapter);
+        var permissions = new Mock<IPermissionProvider>();
+        permissions.Setup(value => value.CheckAccessAsync(It.IsAny<System.Security.Claims.ClaimsPrincipal>(), adapter, Operation.Read)).ReturnsAsync(true);
+        var kubeClient = new Mock<IKubeClientWrapper>();
+        kubeClient.Setup(value => value.ReadStatefulSetAsync("adapter1", "adapter", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new k8s.Autorest.HttpOperationException { Response = new k8s.Autorest.HttpResponseMessageWrapper(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable), "unavailable") });
+        var nodes = new Mock<IServiceNodeInfoProvider>(MockBehavior.Strict);
+        var context = new DefaultHttpContext();
+        var controller = new AdapterReverseProxyController(Mock.Of<IHttpClientFactory>(), nodes.Object, store.Object, permissions.Object,
+            NullLogger<AdapterReverseProxyController>.Instance, new DeploymentOwnership(kubeClient.Object))
+        {
+            ControllerContext = new ControllerContext { HttpContext = context }
+        };
+
+        await controller.ForwardStreamableHttpRequest("adapter1", CancellationToken.None);
+
+        Assert.AreEqual(StatusCodes.Status503ServiceUnavailable, context.Response.StatusCode);
+        Assert.AreEqual("5", context.Response.Headers.RetryAfter.ToString());
     }
 
     private sealed class StubHandler(int statusCode, string body) : HttpMessageHandler

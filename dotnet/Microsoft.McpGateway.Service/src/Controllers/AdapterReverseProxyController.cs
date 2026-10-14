@@ -4,7 +4,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
-using Microsoft.Extensions.Options;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Contracts;
 using Microsoft.McpGateway.Management.Deployment;
@@ -22,8 +21,7 @@ namespace Microsoft.McpGateway.Service.Controllers
         IAdapterResourceStore adapterResourceStore,
         IPermissionProvider permissionProvider,
         ILogger<AdapterReverseProxyController> logger,
-        IKubeClientWrapper kubeClient,
-        IOptions<GatewayKubernetesOptions>? kubernetesOptions = null) : ControllerBase
+        DeploymentOwnership deploymentOwnership) : ControllerBase
     {
         private const string ToolGateway = "toolgateway";
         private readonly IHttpClientFactory httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
@@ -31,7 +29,7 @@ namespace Microsoft.McpGateway.Service.Controllers
         private readonly IAdapterResourceStore adapterResourceStore = adapterResourceStore ?? throw new ArgumentNullException(nameof(adapterResourceStore));
         private readonly IPermissionProvider permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
         private readonly ILogger<AdapterReverseProxyController> logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        private readonly IKubeClientWrapper kubeClient = kubeClient ?? throw new ArgumentNullException(nameof(kubeClient));
+        private readonly DeploymentOwnership deploymentOwnership = deploymentOwnership ?? throw new ArgumentNullException(nameof(deploymentOwnership));
 
         /// <summary>
         /// Support for MCP streamable HTTP connection.
@@ -86,12 +84,18 @@ namespace Microsoft.McpGateway.Service.Controllers
 
             try
             {
-                await DeploymentOwnership.VerifyServiceAsync(kubeClient, adapter.Name, ResourceType.Mcp,
-                    kubernetesOptions?.Value.Namespace ?? "adapter", cancellationToken).ConfigureAwait(false);
+                await deploymentOwnership.VerifyAsync(adapter.Name, ResourceType.Mcp, cancellationToken).ConfigureAwait(false);
             }
             catch (UnauthorizedAccessException)
             {
                 HttpContext.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return false;
+            }
+            catch (DeploymentOwnershipUnavailableException ex)
+            {
+                logger.LogWarning(ex, "Could not verify deployment for adapter {adapterName}.", name.Sanitize());
+                HttpContext.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                HttpContext.Response.Headers.RetryAfter = "5";
                 return false;
             }
 

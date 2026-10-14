@@ -5,6 +5,7 @@ using k8s.Autorest;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.McpGateway.Management.Contracts;
+using Microsoft.McpGateway.Management.Deployment;
 using Microsoft.McpGateway.Management.Service;
 
 namespace Microsoft.McpGateway.Service.Controllers
@@ -25,6 +26,10 @@ namespace Microsoft.McpGateway.Service.Controllers
             {
                 var result = await _managementService.CreateAsync(HttpContext.User, request, cancellationToken).ConfigureAwait(false);
                 return CreatedAtAction(nameof(GetAdapter), new { name = result.Name }, result);
+            }
+            catch (DeploymentDeletionPendingException ex)
+            {
+                return Conflict(ex.Message);
             }
             catch (ArgumentException ex)
             {

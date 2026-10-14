@@ -372,6 +372,21 @@ namespace Microsoft.McpGateway.Management.Tests
         }
 
         [TestMethod]
+        public async Task CreateDeploymentAsync_WhenSameNameIsStillBeingDeleted_ShouldReportRetryableConflict()
+        {
+            var request = new AdapterData { Name = "adapter1", ImageName = "image", ImageVersion = "v1" };
+            _persistedStatefulSet = OwnedStatefulSet("adapter1");
+            _persistedStatefulSet.Metadata.DeletionTimestamp = DateTime.UtcNow;
+            _kubeClientMock.Setup(x => x.UpsertStatefulSetAsync(It.IsAny<V1StatefulSet>(), "adapter", It.IsAny<CancellationToken>()))
+                .ThrowsAsync(HttpError(HttpStatusCode.Conflict));
+
+            Func<Task> act = () => _manager.CreateDeploymentAsync(request, ResourceType.Mcp, CancellationToken.None);
+
+            await act.Should().ThrowAsync<DeploymentDeletionPendingException>();
+            _kubeClientMock.Verify(x => x.DeleteStatefulSetAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [TestMethod]
         public async Task CreateDeploymentAsync_WhenStatefulSetConflictsWithForeignObject_ShouldNotDeleteIt()
         {
             var request = new AdapterData { Name = "adapter1", ImageName = "image", ImageVersion = "v1" };
@@ -541,7 +556,7 @@ namespace Microsoft.McpGateway.Management.Tests
             content.Should().NotBeNull();
             content.Should().Contain("\"adapter/type\":\"mcp\"");
             content.Should().Contain("\"uid\":\"sts-uid\"");
-            content.Should().Contain("\"resourceVersion\":\"10\"");
+            content.Should().NotContain("resourceVersion");
         }
 
         [TestMethod]

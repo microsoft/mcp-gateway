@@ -40,7 +40,7 @@ namespace Microsoft.McpGateway.Management.Foundry
         private readonly IPermissionProvider _permissionProvider;
         private readonly SubAgentInvoker? _subAgentInvoker;
         private readonly ILogger<AgentToolRegistry> _logger;
-        private readonly IKubeClientWrapper _kubeClient;
+        private readonly DeploymentOwnership _deploymentOwnership;
         private readonly string _namespace;
 
         public AgentToolRegistry(
@@ -50,7 +50,7 @@ namespace Microsoft.McpGateway.Management.Foundry
             IPermissionProvider permissionProvider,
             IBuiltinToolAuthorizer builtinToolAuthorizer,
             ILogger<AgentToolRegistry> logger,
-            IKubeClientWrapper kubeClient,
+            DeploymentOwnership deploymentOwnership,
             SubAgentInvoker? subAgentInvoker = null,
             BuiltinToolExecutor? builtinExecutor = null,
             IOptions<GatewayKubernetesOptions>? kubernetesOptions = null)
@@ -61,7 +61,7 @@ namespace Microsoft.McpGateway.Management.Foundry
             _permissionProvider = permissionProvider ?? throw new ArgumentNullException(nameof(permissionProvider));
             ArgumentNullException.ThrowIfNull(builtinToolAuthorizer);
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _kubeClient = kubeClient ?? throw new ArgumentNullException(nameof(kubeClient));
+            _deploymentOwnership = deploymentOwnership ?? throw new ArgumentNullException(nameof(deploymentOwnership));
             _subAgentInvoker = subAgentInvoker;
             _namespace = kubernetesOptions?.Value.Namespace ?? "adapter";
         }
@@ -184,11 +184,16 @@ namespace Microsoft.McpGateway.Management.Foundry
 
             try
             {
-                await DeploymentOwnership.VerifyServiceAsync(_kubeClient, current.Name, ResourceType.Tool, _namespace, cancellationToken).ConfigureAwait(false);
+                await _deploymentOwnership.VerifyAsync(current.Name, ResourceType.Tool, cancellationToken).ConfigureAwait(false);
             }
             catch (UnauthorizedAccessException)
             {
                 return new ToolResult(JsonSerializer.Serialize(new { error = "The deployment does not belong to this tool." }), IsError: true);
+            }
+            catch (DeploymentOwnershipUnavailableException ex)
+            {
+                _logger.LogWarning(ex, "Could not verify deployment for MCP tool {tool}.", tool.Name);
+                return new ToolResult(JsonSerializer.Serialize(new { error = $"MCP tool '{tool.Name}' is temporarily unavailable. Retry shortly." }), IsError: true);
             }
 
             var def = current.ToolDefinition;

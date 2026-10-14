@@ -151,8 +151,8 @@ public class BuiltinToolsE2ETests
             builder.Services.Configure<BuiltinToolSettings>(options => options.RequiredRoles = configureRole ? ["mcp.builtin"] : []);
             builder.Services.AddSingleton<IBuiltinToolAuthorizer, BuiltinToolAuthorizer>();
             builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
-            builder.Services.AddSingleton<Microsoft.McpGateway.Management.Deployment.IKubeClientWrapper>(
-                Moq.Mock.Of<Microsoft.McpGateway.Management.Deployment.IKubeClientWrapper>());
+            builder.Services.AddSingleton(new Microsoft.McpGateway.Management.Deployment.DeploymentOwnership(
+                Moq.Mock.Of<Microsoft.McpGateway.Management.Deployment.IKubeClientWrapper>()));
             builder.Services.AddSingleton<IAgentResourceStore, InMemoryAgentResourceStore>();
             builder.Services.AddSingleton<ISessionResourceStore, InMemorySessionResourceStore>();
             builder.Services.AddSingleton<IToolResourceStore, InMemoryToolResourceStore>();

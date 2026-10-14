@@ -161,6 +161,7 @@ builder.Services.AddSingleton<IKubeClientWrapper>(c =>
     var kubeClientFactory = c.GetRequiredService<IKubernetesClientFactory>();
     return new KubeClient(kubeClientFactory, c.GetRequiredService<IOptions<GatewayKubernetesOptions>>().Value.Namespace);
 });
+builder.Services.AddSingleton<DeploymentOwnership>();
 builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
 
 // Legacy built-in role settings are retained for configuration compatibility.
@@ -176,7 +177,7 @@ builder.Services.AddSingleton<IWorkloadIdentityAuthorizer, WorkloadIdentityAutho
 builder.Services.AddSingleton<IAdapterDeploymentManager>(c =>
 {
     var config = builder.Configuration.GetSection("ContainerRegistrySettings");
-    return new KubernetesAdapterDeploymentManager(config["Endpoint"]!, c.GetRequiredService<IKubeClientWrapper>(), c.GetRequiredService<ILogger<KubernetesAdapterDeploymentManager>>(), c.GetRequiredService<IOptions<GatewayKubernetesOptions>>());
+    return new KubernetesAdapterDeploymentManager(config["Endpoint"]!, c.GetRequiredService<IKubeClientWrapper>(), c.GetRequiredService<ILogger<KubernetesAdapterDeploymentManager>>(), c.GetRequiredService<IOptions<GatewayKubernetesOptions>>(), c.GetRequiredService<DeploymentOwnership>());
 });
 builder.Services.AddSingleton<IAdapterManagementService, AdapterManagementService>();
 builder.Services.AddSingleton<IToolManagementService, ToolManagementService>();

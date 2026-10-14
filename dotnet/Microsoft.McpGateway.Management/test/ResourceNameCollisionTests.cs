@@ -125,7 +125,7 @@ namespace Microsoft.McpGateway.Management.Tests
         {
             await _deploymentManager.CreateDeploymentAsync(AdapterRequest(SharedName), deployedType, CancellationToken.None);
 
-            Func<Task> act = () => DeploymentOwnership.VerifyServiceAsync(_cluster, SharedName, requestedType, "adapter", CancellationToken.None);
+            Func<Task> act = () => new DeploymentOwnership(_cluster).VerifyAsync(SharedName, requestedType, CancellationToken.None);
 
             await act.Should().ThrowAsync<UnauthorizedAccessException>();
         }
@@ -138,7 +138,7 @@ namespace Microsoft.McpGateway.Management.Tests
             await _deploymentManager.CreateDeploymentAsync(AdapterRequest(SharedName), resourceType, CancellationToken.None);
             _cluster.Services[$"{SharedName}-service"].Spec.Selector = new Dictionary<string, string> { ["app"] = "first-party" };
 
-            Func<Task> act = () => DeploymentOwnership.VerifyServiceAsync(_cluster, SharedName, resourceType, "adapter", CancellationToken.None);
+            Func<Task> act = () => new DeploymentOwnership(_cluster).VerifyAsync(SharedName, resourceType, CancellationToken.None);
 
             await act.Should().ThrowAsync<UnauthorizedAccessException>();
         }
@@ -148,7 +148,7 @@ namespace Microsoft.McpGateway.Management.Tests
         [DataRow(ResourceType.Tool)]
         public async Task Routing_RejectsAMissingWorkload(ResourceType resourceType)
         {
-            Func<Task> act = () => DeploymentOwnership.VerifyServiceAsync(_cluster, SharedName, resourceType, "adapter", CancellationToken.None);
+            Func<Task> act = () => new DeploymentOwnership(_cluster).VerifyAsync(SharedName, resourceType, CancellationToken.None);
 
             await act.Should().ThrowAsync<UnauthorizedAccessException>();
         }
@@ -160,7 +160,108 @@ namespace Microsoft.McpGateway.Management.Tests
         {
             await _deploymentManager.CreateDeploymentAsync(AdapterRequest(SharedName), resourceType, CancellationToken.None);
 
-            await DeploymentOwnership.VerifyServiceAsync(_cluster, SharedName, resourceType, "adapter", CancellationToken.None);
+            await new DeploymentOwnership(_cluster).VerifyAsync(SharedName, resourceType, CancellationToken.None);
+        }
+
+        [TestMethod]
+        public async Task Routing_CachesVerifiedOwnership()
+        {
+            await _deploymentManager.CreateDeploymentAsync(AdapterRequest(SharedName), ResourceType.Tool, CancellationToken.None);
+            var ownership = new DeploymentOwnership(_cluster);
+
+            await ownership.VerifyAsync(SharedName, ResourceType.Tool, CancellationToken.None);
+            var reads = _cluster.Reads;
+            await ownership.VerifyAsync(SharedName, ResourceType.Tool, CancellationToken.None);
+
+            _cluster.Reads.Should().Be(reads);
+        }
+
+        [TestMethod]
+        public async Task Routing_DeletionInvalidatesVerifiedOwnership()
+        {
+            using var ownership = new DeploymentOwnership(_cluster);
+            var manager = new KubernetesAdapterDeploymentManager("registry.io", _cluster,
+                NullLogger<KubernetesAdapterDeploymentManager>.Instance, ownership: ownership);
+            await manager.CreateDeploymentAsync(AdapterRequest(SharedName), ResourceType.Mcp, CancellationToken.None);
+            await ownership.VerifyAsync(SharedName, ResourceType.Mcp, CancellationToken.None);
+
+            await manager.DeleteDeploymentAsync(SharedName, ResourceType.Mcp, CancellationToken.None);
+
+            Func<Task> act = () => ownership.VerifyAsync(SharedName, ResourceType.Mcp, CancellationToken.None);
+            await act.Should().ThrowAsync<UnauthorizedAccessException>();
+        }
+
+        [TestMethod]
+        public async Task Routing_CreateInvalidatesCachedMissingResult()
+        {
+            using var ownership = new DeploymentOwnership(_cluster);
+            var manager = new KubernetesAdapterDeploymentManager("registry.io", _cluster,
+                NullLogger<KubernetesAdapterDeploymentManager>.Instance, ownership: ownership);
+            Func<Task> missing = () => ownership.VerifyAsync(SharedName, ResourceType.Mcp, CancellationToken.None);
+            await missing.Should().ThrowAsync<UnauthorizedAccessException>();
+
+            await manager.CreateDeploymentAsync(AdapterRequest(SharedName), ResourceType.Mcp, CancellationToken.None);
+
+            await ownership.VerifyAsync(SharedName, ResourceType.Mcp, CancellationToken.None);
+        }
+
+        [TestMethod]
+        public async Task Routing_ConcurrentRequestsShareOneLookup()
+        {
+            await _deploymentManager.CreateDeploymentAsync(AdapterRequest(SharedName), ResourceType.Mcp, CancellationToken.None);
+            var statefulSet = new TaskCompletionSource<V1StatefulSet>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var service = new TaskCompletionSource<V1Service>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var kubeClient = new Mock<IKubeClientWrapper>();
+            kubeClient.Setup(client => client.ReadStatefulSetAsync(SharedName, "adapter", It.IsAny<CancellationToken>())).Returns(statefulSet.Task);
+            kubeClient.Setup(client => client.ReadServiceAsync($"{SharedName}-service", "adapter", It.IsAny<CancellationToken>())).Returns(service.Task);
+            using var ownership = new DeploymentOwnership(kubeClient.Object);
+
+            var requests = Enumerable.Range(0, 64).Select(index => ownership.VerifyAsync(SharedName, ResourceType.Mcp, CancellationToken.None)).ToArray();
+            kubeClient.Verify(client => client.ReadStatefulSetAsync(SharedName, "adapter", It.IsAny<CancellationToken>()), Times.Once);
+            kubeClient.Verify(client => client.ReadServiceAsync($"{SharedName}-service", "adapter", It.IsAny<CancellationToken>()), Times.Once);
+            statefulSet.SetResult(_cluster.StatefulSets[SharedName]);
+            service.SetResult(_cluster.Services[$"{SharedName}-service"]);
+            await Task.WhenAll(requests);
+        }
+
+        [TestMethod]
+        public async Task Routing_ExpiredApprovalDoesNotMaskApiFailures()
+        {
+            await _deploymentManager.CreateDeploymentAsync(AdapterRequest(SharedName), ResourceType.Mcp, CancellationToken.None);
+            var clock = new ManualTimeProvider();
+            var kubeClient = new Mock<IKubeClientWrapper>();
+            kubeClient.Setup(client => client.ReadStatefulSetAsync(SharedName, "adapter", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(_cluster.StatefulSets[SharedName]);
+            kubeClient.Setup(client => client.ReadServiceAsync($"{SharedName}-service", "adapter", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(_cluster.Services[$"{SharedName}-service"]);
+            using var ownership = new DeploymentOwnership(kubeClient.Object, timeProvider: clock);
+            await ownership.VerifyAsync(SharedName, ResourceType.Mcp, CancellationToken.None);
+            clock.Advance(TimeSpan.FromSeconds(31));
+            kubeClient.Setup(client => client.ReadStatefulSetAsync(SharedName, "adapter", It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new HttpRequestException("unavailable"));
+
+            Func<Task> act = () => ownership.VerifyAsync(SharedName, ResourceType.Mcp, CancellationToken.None);
+
+            await act.Should().ThrowAsync<DeploymentOwnershipUnavailableException>();
+        }
+
+        private sealed class ManualTimeProvider : TimeProvider
+        {
+            private DateTimeOffset _now = DateTimeOffset.UtcNow;
+            public override DateTimeOffset GetUtcNow() => _now;
+            public void Advance(TimeSpan elapsed) => _now += elapsed;
+        }
+
+        [TestMethod]
+        public async Task Routing_ReportsApiServerFailuresAsRetryable()
+        {
+            var kubeClient = new Mock<IKubeClientWrapper>();
+            kubeClient.Setup(x => x.ReadStatefulSetAsync(SharedName, "adapter", It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new HttpOperationException { Response = new HttpResponseMessageWrapper(new HttpResponseMessage(HttpStatusCode.TooManyRequests), "throttled") });
+
+            Func<Task> act = () => new DeploymentOwnership(kubeClient.Object).VerifyAsync(SharedName, ResourceType.Mcp, CancellationToken.None);
+
+            await act.Should().ThrowAsync<DeploymentOwnershipUnavailableException>();
         }
 
         private static AdapterData AdapterRequest(string name) =>
@@ -192,6 +293,7 @@ namespace Microsoft.McpGateway.Management.Tests
             public Dictionary<string, V1Pod> Pods { get; } = [];
             public Dictionary<string, string> PodLogs { get; } = [];
             public List<string> PatchedStatefulSets { get; } = [];
+            public int Reads { get; private set; }
 
             public Task<V1StatefulSet> UpsertStatefulSetAsync(V1StatefulSet statefulSet, string? ns = null, CancellationToken cancellationToken = default)
             {
@@ -229,11 +331,17 @@ namespace Microsoft.McpGateway.Management.Tests
                 return Task.FromResult(service);
             }
 
-            public Task<V1StatefulSet> ReadStatefulSetAsync(string name, string? ns = null, CancellationToken cancellationToken = default) =>
-                Task.FromResult(StatefulSets.TryGetValue(name, out var statefulSet) ? statefulSet : throw HttpError(HttpStatusCode.NotFound));
+            public Task<V1StatefulSet> ReadStatefulSetAsync(string name, string? ns = null, CancellationToken cancellationToken = default)
+            {
+                Reads++;
+                return Task.FromResult(StatefulSets.TryGetValue(name, out var statefulSet) ? statefulSet : throw HttpError(HttpStatusCode.NotFound));
+            }
 
-            public Task<V1Service> ReadServiceAsync(string name, string? ns = null, CancellationToken cancellationToken = default) =>
-                Task.FromResult(Services.TryGetValue(name, out var service) ? service : throw HttpError(HttpStatusCode.NotFound));
+            public Task<V1Service> ReadServiceAsync(string name, string? ns = null, CancellationToken cancellationToken = default)
+            {
+                Reads++;
+                return Task.FromResult(Services.TryGetValue(name, out var service) ? service : throw HttpError(HttpStatusCode.NotFound));
+            }
 
             public Task<V1Pod> ReadPodAsync(string name, string? ns = null, CancellationToken cancellationToken = default) =>
                 Task.FromResult(Pods.TryGetValue(name, out var pod) ? pod : throw HttpError(HttpStatusCode.NotFound));

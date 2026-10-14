@@ -25,6 +25,7 @@ builder.Services.AddSingleton<IKubernetesClientFactory, LocalKubernetesClientFac
 builder.Services.AddSingleton<IKubeClientWrapper>(services => new KubeClient(
     services.GetRequiredService<IKubernetesClientFactory>(),
     services.GetRequiredService<IOptions<GatewayKubernetesOptions>>().Value.Namespace));
+builder.Services.AddSingleton<DeploymentOwnership>();
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
