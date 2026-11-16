@@ -203,7 +203,7 @@ namespace Microsoft.McpGateway.Management.Foundry
 
             _logger.LogInformation("Calling MCP tool {tool} at {endpoint} (args {len} bytes)", tool.Name, endpoint, argumentsJson?.Length ?? 0);
 
-            using var client = _httpClientFactory.CreateClient();
+            using var client = _httpClientFactory.CreateClient(ToolExecutionHttpClient.Name);
             client.Timeout = TimeSpan.FromSeconds(60);
             using var content = new StringContent(argumentsJson ?? "{}", Encoding.UTF8, "application/json");
             using var response = await client.PostAsync(endpoint, content, cancellationToken).ConfigureAwait(false);

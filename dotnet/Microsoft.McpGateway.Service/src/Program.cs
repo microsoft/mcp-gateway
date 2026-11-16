@@ -206,6 +206,7 @@ builder.Services.AddControllers();
 builder.Services.AddHttpClient();
 builder.Services.AddHttpClient(Microsoft.McpGateway.Service.Constants.HttpClientNames.AdapterProxyClient)
     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
+builder.Services.AddToolExecutionHttpClient();
 
 builder.WebHost.ConfigureKestrel(options =>
 {

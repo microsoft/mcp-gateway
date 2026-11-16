@@ -30,7 +30,7 @@ builder.Services.AddSingleton<DeploymentOwnership>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<IPermissionProvider, SimplePermissionProvider>();
 // Add HttpClient for tool execution
-builder.Services.AddHttpClient();
+builder.Services.AddToolExecutionHttpClient();
 
 // Configure tool resource store and tool definition provider
 if (builder.Environment.IsDevelopment())

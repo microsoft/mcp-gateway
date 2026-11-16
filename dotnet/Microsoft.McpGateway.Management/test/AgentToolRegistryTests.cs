@@ -12,6 +12,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using k8s.Models;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.McpGateway.Management.Authorization;
 using Microsoft.McpGateway.Management.Contracts;
@@ -138,6 +141,40 @@ namespace Microsoft.McpGateway.Management.Tests
             }
         }
 
+        // Stand-in for a tenant tool pod that answers every invocation with a
+        // redirect to another endpoint the gateway can reach.
+        private static async Task<WebApplication> StartRedirectingToolPodAsync(HttpStatusCode redirectStatus, Action onInternalRequest)
+        {
+            var builder = WebApplication.CreateBuilder();
+            builder.WebHost.UseUrls("http://127.0.0.1:0");
+            builder.Logging.ClearProviders();
+            var pod = builder.Build();
+            pod.MapPost("/score", context =>
+            {
+                context.Response.StatusCode = (int)redirectStatus;
+                context.Response.Headers.Location = "/internal";
+                return Task.CompletedTask;
+            });
+            pod.Map("/internal", () =>
+            {
+                onInternalRequest();
+                return "internal-secret";
+            });
+            await pod.StartAsync();
+            return pod;
+        }
+
+        // Sends the cluster-DNS tool endpoint to the local stand-in pod. It runs
+        // ahead of the primary handler, which alone decides whether to follow redirects.
+        private sealed class RouteToPodHandler(Uri pod) : DelegatingHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                request.RequestUri = new UriBuilder(request.RequestUri!) { Host = pod.Host, Port = pod.Port }.Uri;
+                return base.SendAsync(request, cancellationToken);
+            }
+        }
+
         // ---- ResolveAsync: unauthorized nested resources must not be advertised ----
 
         [TestMethod]
@@ -260,6 +297,50 @@ namespace Microsoft.McpGateway.Management.Tests
 
             result.IsError.Should().BeTrue();
             _httpFactory.Verify(f => f.CreateClient(It.IsAny<string>()), Times.Never);
+        }
+
+        // ---- ExecuteAsync: tool pod redirects are not followed ----
+
+        [DataTestMethod]
+        [DataRow(HttpStatusCode.Found)]
+        [DataRow(HttpStatusCode.TemporaryRedirect)]
+        public async Task ExecuteAsync_ShouldNotFollowRedirectFromMcpTool(HttpStatusCode redirectStatus)
+        {
+            var internalRequests = 0;
+            await using var pod = await StartRedirectingToolPodAsync(redirectStatus, () => Interlocked.Increment(ref internalRequests));
+            var services = new ServiceCollection();
+            services.AddToolExecutionHttpClient();
+            services.ConfigureHttpClientDefaults(client => client.AddHttpMessageHandler(() => new RouteToPodHandler(new Uri(pod.Urls.Single()))));
+            using var clients = services.BuildServiceProvider();
+
+            var tool = CreateTool("redirecting-tool", "tool-owner");
+            var labels = new Dictionary<string, string> { ["adapter/type"] = "tool", ["adapter/name"] = tool.Name };
+            _kubeClient.Setup(client => client.ReadStatefulSetAsync(tool.Name, "adapter", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new V1StatefulSet { Metadata = new V1ObjectMeta { Uid = "workload-uid" }, Spec = new V1StatefulSetSpec { Selector = new V1LabelSelector { MatchLabels = labels } } });
+            _kubeClient.Setup(client => client.ReadServiceAsync($"{tool.Name}-service", "adapter", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new V1Service { Metadata = new V1ObjectMeta { Uid = "service-uid" }, Spec = new V1ServiceSpec { Selector = labels } });
+            _toolStore.Setup(s => s.TryGetAsync(tool.Name, It.IsAny<CancellationToken>())).ReturnsAsync(tool);
+            _permission.Setup(p => p.CheckAccessAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<IManagedResource>(), Operation.Read)).ReturnsAsync(true);
+            var registry = new AgentToolRegistry(
+                _toolStore.Object,
+                _agentStore.Object,
+                clients.GetRequiredService<IHttpClientFactory>(),
+                _permission.Object,
+                _builtinAuthorizer.Object,
+                _logger.Object,
+                new DeploymentOwnership(_kubeClient.Object));
+
+            var result = await registry.ExecuteAsync(
+                new McpResolvedTool(tool.Name, tool),
+                "{\"query\":\"caller-argument\"}",
+                parentSessionId: "parent-session",
+                workingDirectory: null,
+                Caller("tool-owner"),
+                CancellationToken.None);
+
+            result.IsError.Should().BeTrue();
+            result.Content.Should().Contain($"HTTP {(int)redirectStatus}").And.NotContain("internal-secret");
+            internalRequests.Should().Be(0);
         }
 
         [TestMethod]
