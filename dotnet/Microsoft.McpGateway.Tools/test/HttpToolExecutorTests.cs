@@ -46,7 +46,7 @@ namespace Microsoft.McpGateway.Tools.Tests
             var result = await executor.ExecuteToolAsync(CreateCallToolContext(tool.Name), CancellationToken.None);
 
             result.IsError.Should().BeTrue();
-            result.Content.OfType<TextContentBlock>().Single().Text.Should().NotContain("internal-secret");
+            result.Content.OfType<TextContentBlock>().Single().Text.Should().Be($"Error: Inference server returned {redirectStatus}");
             internalRequests.Should().Be(0);
         }
 
