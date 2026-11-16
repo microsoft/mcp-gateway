@@ -125,7 +125,7 @@ namespace Microsoft.McpGateway.Tools.Services
                     executionEndpoint);
 
                 // Send request to inference server
-                using var client = this.httpClientFactory.CreateClient();
+                using var client = this.httpClientFactory.CreateClient(ToolExecutionHttpClient.Name);
                 using var jsonContent = new StringContent(
                     JsonSerializer.Serialize(requestContext.Params?.Arguments),
                     Encoding.UTF8,
