@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Logging;
 using Microsoft.McpGateway.Management.Contracts;
+using Microsoft.McpGateway.Management.Extensions;
 
 namespace Microsoft.McpGateway.Management.Store
 {
@@ -32,7 +33,7 @@ namespace Microsoft.McpGateway.Management.Store
             
             if (string.IsNullOrEmpty(json))
             {
-                _logger.LogDebug("Adapter {Name} not found in Redis", name);
+                _logger.LogDebug("Adapter {Name} not found in Redis", name.Sanitize());
                 return null;
             }
 
@@ -49,7 +50,7 @@ namespace Microsoft.McpGateway.Management.Store
             // Add to list for ListAsync
             await AddToListAsync(adapter.Name, cancellationToken).ConfigureAwait(false);
             
-            _logger.LogInformation("Upserted adapter {Name} to Redis", adapter.Name);
+            _logger.LogInformation("Upserted adapter {Name} to Redis", adapter.Name.Sanitize());
         }
 
         public async Task DeleteAsync(string name, CancellationToken cancellationToken)
@@ -60,7 +61,7 @@ namespace Microsoft.McpGateway.Management.Store
             // Remove from list
             await RemoveFromListAsync(name, cancellationToken).ConfigureAwait(false);
             
-            _logger.LogInformation("Deleted adapter {Name} from Redis", name);
+            _logger.LogInformation("Deleted adapter {Name} from Redis", name.Sanitize());
         }
 
         public async Task<IEnumerable<AdapterResource>> ListAsync(CancellationToken cancellationToken)
